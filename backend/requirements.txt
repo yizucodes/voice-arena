@@ -1,0 +1,27 @@
+# FastAPI and server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-dotenv>=1.0.0
+
+# Async support
+aiohttp>=3.9.1
+httpx>=0.26.0
+
+# Data validation
+pydantic>=2.5.3
+
+# WebSocket support (included in uvicorn[standard])
+websockets>=12.0
+
+# External services
+openai>=1.12.0
+daytona-sdk>=0.10.0
+elevenlabs>=1.0.0
+
+# Sentry - AI Agent monitoring and error tracking
+sentry-sdk[openai]>=1.40.0
+requests>=2.31.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
