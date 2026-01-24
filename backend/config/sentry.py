@@ -9,12 +9,15 @@ Features:
 - OpenAI integration for prompt/response capture
 - Custom spans for Daytona sandbox operations
 - Automatic error context capture for GPT-4o self-healing
+- gen_ai.invoke_agent spans for AI Agents Insights dashboard
 """
 
 import os
+import json
 import sentry_sdk
 from sentry_sdk.integrations.openai import OpenAIIntegration
-from typing import Optional
+from typing import Optional, Any
+from contextlib import contextmanager
 
 # Environment variable names
 SENTRY_DSN_ENV = "SENTRY_DSN"
@@ -85,8 +88,9 @@ def init_sentry(
                 )
             ],
             
-            # Enable full context capture
-            send_default_pii=False,  # Don't send PII by default
+            # Enable full context capture for AI monitoring
+            # IMPORTANT: send_default_pii=True is REQUIRED to capture AI inputs/outputs
+            send_default_pii=True,  # Required for AI Agent monitoring
             attach_stacktrace=True,  # Always attach stacktraces
             
             # Debug mode (for development)
@@ -327,3 +331,209 @@ def capture_exception(exception: Exception, **kwargs):
         for key, value in kwargs.items():
             scope.set_extra(key, value)
         sentry_sdk.capture_exception(exception)
+
+
+# =============================================================================
+# AI Agent Monitoring (gen_ai.invoke_agent spans)
+# =============================================================================
+
+@contextmanager
+def start_voice_agent_span(
+    agent_name: str = "Voice Arena Agent",
+    model: str = "eleven_turbo_v2",
+    prompt: Optional[str] = None,
+    test_input: Optional[str] = None,
+    iteration: Optional[int] = None
+):
+    """
+    Start a gen_ai.invoke_agent span for ElevenLabs voice agent.
+    
+    This makes the agent appear in Sentry's AI Agents Insights dashboard.
+    Required by Sentry for agents to show in AI monitoring.
+    
+    IMPORTANT: If no transaction is active, this creates a new transaction.
+    This prevents orphaned spans that would otherwise be dropped by Sentry.
+    
+    See: https://docs.sentry.io/platforms/python/tracing/instrumentation/custom-instrumentation/ai-agents-module/
+    
+    Args:
+        agent_name: Name of the agent (appears in dashboard)
+        model: ElevenLabs model ID
+        prompt: Agent's system prompt
+        test_input: User's test input
+        iteration: Current iteration number
+    
+    Yields:
+        Sentry span for setting result data
+    """
+    # Check if there's an active transaction
+    # If not, we need to create one or spans will be orphaned and dropped
+    current_span = sentry_sdk.get_current_span()
+    
+    if current_span is None:
+        # No active transaction - create a new transaction as the root
+        # This ensures spans are not orphaned
+        span = sentry_sdk.start_transaction(
+            op="gen_ai.invoke_agent",
+            name=f"invoke_agent {agent_name}",
+        )
+        is_transaction = True
+    else:
+        # There's an active transaction - create a child span
+        span = sentry_sdk.start_span(
+            op="gen_ai.invoke_agent",
+            name=f"invoke_agent {agent_name}",
+        )
+        is_transaction = False
+    
+    try:
+        # Required attributes for AI Agents dashboard
+        span.set_data("gen_ai.operation.name", "invoke_agent")
+        span.set_data("gen_ai.agent.name", agent_name)
+        span.set_data("gen_ai.request.model", model)
+        
+        # Optional but recommended attributes
+        if prompt:
+            # Format messages for Sentry (stringified JSON)
+            messages = [{"role": "system", "content": prompt}]
+            if test_input:
+                messages.append({"role": "user", "content": test_input})
+            span.set_data("gen_ai.request.messages", json.dumps(messages))
+        
+        if iteration is not None:
+            span.set_tag("iteration", iteration)
+        
+        if test_input:
+            span.set_data("gen_ai.user.message", test_input[:500])  # Truncate for size
+        
+        yield span
+        
+    finally:
+        span.finish()
+
+
+def set_voice_agent_result(
+    span,
+    response_text: Optional[str] = None,
+    success: bool = True,
+    duration_seconds: float = 0.0,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None
+):
+    """
+    Set the result data on a voice agent span.
+    
+    Call this before the span context exits to record the agent's response
+    and execution metrics.
+    
+    Args:
+        span: The gen_ai.invoke_agent span
+        response_text: Agent's response text
+        success: Whether the invocation succeeded
+        duration_seconds: How long it took
+        input_tokens: Token count (if available from ElevenLabs)
+        output_tokens: Token count (if available from ElevenLabs)
+    """
+    if span is None:
+        return
+    
+    if response_text:
+        # Sentry expects stringified JSON array for response.text
+        span.set_data("gen_ai.response.text", json.dumps([response_text]))
+    
+    if input_tokens is not None:
+        span.set_data("gen_ai.usage.input_tokens", input_tokens)
+    
+    if output_tokens is not None:
+        span.set_data("gen_ai.usage.output_tokens", output_tokens)
+    
+    if input_tokens is not None and output_tokens is not None:
+        span.set_data("gen_ai.usage.total_tokens", input_tokens + output_tokens)
+    
+    span.set_data("duration_seconds", duration_seconds)
+    span.set_status("ok" if success else "internal_error")
+
+
+@contextmanager
+def start_tool_span(
+    tool_name: str,
+    inputs: Optional[dict] = None
+):
+    """
+    Start a gen_ai.execute_tool span for tool execution.
+    
+    Use this to track tool calls made by AI agents, such as:
+    - Sandbox creation/management
+    - Failure detection
+    - External API calls
+    
+    IMPORTANT: If no transaction is active, this creates a new transaction.
+    This prevents orphaned spans that would otherwise be dropped by Sentry.
+    
+    See: https://docs.sentry.io/platforms/python/tracing/instrumentation/custom-instrumentation/ai-agents-module/
+    
+    Args:
+        tool_name: Name of the tool being executed
+        inputs: Optional dictionary of tool inputs
+    
+    Yields:
+        Sentry span for setting result data
+    """
+    # Check if there's an active transaction
+    current_span = sentry_sdk.get_current_span()
+    
+    if current_span is None:
+        # No active transaction - create a new transaction
+        span = sentry_sdk.start_transaction(
+            op="gen_ai.execute_tool",
+            name=f"execute_tool {tool_name}",
+        )
+    else:
+        # There's an active transaction - create a child span
+        span = sentry_sdk.start_span(
+            op="gen_ai.execute_tool",
+            name=f"execute_tool {tool_name}",
+        )
+    
+    try:
+        # Required attribute
+        span.set_data("gen_ai.tool.name", tool_name)
+        
+        # Optional input
+        if inputs:
+            span.set_data("gen_ai.tool.input", json.dumps(inputs))
+        
+        yield span
+        
+    finally:
+        span.finish()
+
+
+def set_tool_result(
+    span,
+    output: Optional[Any] = None,
+    success: bool = True,
+    error: Optional[str] = None
+):
+    """
+    Set the result data on a tool execution span.
+    
+    Args:
+        span: The gen_ai.execute_tool span
+        output: Tool output (will be JSON-stringified)
+        success: Whether the tool execution succeeded
+        error: Error message if failed
+    """
+    if span is None:
+        return
+    
+    if output is not None:
+        try:
+            span.set_data("gen_ai.tool.output", json.dumps(output))
+        except (TypeError, ValueError):
+            span.set_data("gen_ai.tool.output", str(output))
+    
+    if error:
+        span.set_data("gen_ai.tool.error", error)
+    
+    span.set_status("ok" if success else "internal_error")

@@ -10,6 +10,7 @@ Key features:
 - Capture agent responses and build transcripts
 - Automatic cleanup of temporary agents
 - Failure detection (security leaks, repetition loops)
+- gen_ai.invoke_agent spans for Sentry AI Agents Insights
 """
 
 import os
@@ -18,6 +19,7 @@ import uuid
 import json
 import asyncio
 import aiohttp
+import sentry_sdk
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,6 +27,9 @@ from typing import Optional, List, Dict, Any
 from collections import Counter
 
 from dotenv import load_dotenv
+
+# Import Sentry AI agent monitoring functions
+from config.sentry import start_voice_agent_span, set_voice_agent_result
 
 # Load environment variables
 load_dotenv()
@@ -476,42 +481,66 @@ class MockElevenLabsClient(BaseElevenLabsClient):
         voice_id: Optional[str] = None,
         iteration: int = 1
     ) -> ConversationResult:
-        """Simulate a conversation with mock responses."""
+        """
+        Simulate a conversation with mock responses.
+        
+        Wrapped with gen_ai.invoke_agent span for Sentry AI Agent Monitoring.
+        """
         start_time = datetime.now(timezone.utc)
         
-        # Generate agent ID
-        agent_id = f"mock-agent-{uuid.uuid4().hex[:8]}"
-        conversation_id = f"mock-conv-{uuid.uuid4().hex[:8]}"
-        
-        # Store agent info
-        self._agents_created[agent_id] = {
-            "prompt": agent_prompt,
-            "created_at": start_time.isoformat()
-        }
-        
-        # Simulate some delay
-        await asyncio.sleep(0.1)
-        
-        # Generate mock conversation
-        turns = self._generate_mock_response(agent_prompt, test_input, iteration)
-        
-        # Build raw transcript
-        raw_lines = []
-        for turn in turns:
-            raw_lines.append(f"{turn.role}: {turn.content}")
-        raw_transcript = "\n".join(raw_lines)
-        
-        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        self._conversation_count += 1
-        
-        return ConversationResult(
-            success=True,
-            transcript=turns,
-            raw_transcript=raw_transcript,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
-            duration_seconds=duration
-        )
+        # Start gen_ai.invoke_agent span for Sentry AI Agent Monitoring
+        with start_voice_agent_span(
+            agent_name="Voice Arena Agent (Mock)",
+            model="eleven_turbo_v2",
+            prompt=agent_prompt,
+            test_input=test_input,
+            iteration=iteration
+        ) as agent_span:
+            # Generate agent ID
+            agent_id = f"mock-agent-{uuid.uuid4().hex[:8]}"
+            conversation_id = f"mock-conv-{uuid.uuid4().hex[:8]}"
+            
+            # Store agent info
+            self._agents_created[agent_id] = {
+                "prompt": agent_prompt,
+                "created_at": start_time.isoformat()
+            }
+            
+            # Simulate some delay
+            await asyncio.sleep(0.1)
+            
+            # Generate mock conversation
+            turns = self._generate_mock_response(agent_prompt, test_input, iteration)
+            
+            # Build raw transcript
+            raw_lines = []
+            for turn in turns:
+                raw_lines.append(f"{turn.role}: {turn.content}")
+            raw_transcript = "\n".join(raw_lines)
+            
+            # Extract agent response for Sentry span
+            agent_responses = [turn.content for turn in turns if turn.role == "agent"]
+            response_text = " ".join(agent_responses) if agent_responses else ""
+            
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            self._conversation_count += 1
+            
+            # Set result on Sentry span
+            set_voice_agent_result(
+                agent_span,
+                response_text=response_text,
+                success=True,
+                duration_seconds=duration
+            )
+            
+            return ConversationResult(
+                success=True,
+                transcript=turns,
+                raw_transcript=raw_transcript,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                duration_seconds=duration
+            )
     
     async def cleanup(self, agent_id: str) -> bool:
         """Clean up mock agent."""
@@ -866,6 +895,8 @@ class ElevenLabsClient(BaseElevenLabsClient):
         """
         Simulate a conversation with a real ElevenLabs agent.
         
+        Wrapped with gen_ai.invoke_agent span for Sentry AI Agent Monitoring.
+        
         This method:
         1. Creates a temporary agent with the given prompt
         2. Connects via WebSocket and sends the test message
@@ -875,69 +906,103 @@ class ElevenLabsClient(BaseElevenLabsClient):
         start_time = datetime.now(timezone.utc)
         agent_id = None
         
-        try:
-            # Step 1: Create temporary agent
-            agent_id = await self._create_agent(
-                system_prompt=agent_prompt,
-                first_message=first_message,
-                voice_id=voice_id
-            )
-            
-            if not agent_id:
+        # Start gen_ai.invoke_agent span for Sentry AI Agent Monitoring
+        with start_voice_agent_span(
+            agent_name="Voice Arena Agent",
+            model=DEFAULT_MODEL_ID,
+            prompt=agent_prompt,
+            test_input=test_input,
+            iteration=iteration
+        ) as agent_span:
+            try:
+                # Step 1: Create temporary agent
+                agent_id = await self._create_agent(
+                    system_prompt=agent_prompt,
+                    first_message=first_message,
+                    voice_id=voice_id
+                )
+                
+                if not agent_id:
+                    set_voice_agent_result(agent_span, success=False)
+                    return ConversationResult(
+                        success=False,
+                        error="Failed to create agent"
+                    )
+                
+                # Step 2: Get signed URL for WebSocket
+                signed_url = await self._get_signed_url(agent_id)
+                
+                if not signed_url:
+                    set_voice_agent_result(agent_span, success=False)
+                    return ConversationResult(
+                        success=False,
+                        agent_id=agent_id,
+                        error="Failed to get signed URL"
+                    )
+                
+                # Step 3: Run conversation via WebSocket
+                debug_mode = os.getenv("ELEVENLABS_DEBUG", "").lower() in ("1", "true", "yes")
+                turns = await self._run_websocket_conversation(
+                    signed_url=signed_url,
+                    test_input=test_input,
+                    debug=debug_mode
+                )
+                
+                # Build raw transcript
+                raw_lines = [f"{turn.role}: {turn.content}" for turn in turns]
+                raw_transcript = "\n".join(raw_lines)
+                
+                # Extract agent response for Sentry span
+                agent_responses = [turn.content for turn in turns if turn.role == "agent"]
+                response_text = " ".join(agent_responses) if agent_responses else ""
+                
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                
+                # Set result on Sentry span
+                set_voice_agent_result(
+                    agent_span,
+                    response_text=response_text,
+                    success=True,
+                    duration_seconds=duration
+                    # Note: ElevenLabs doesn't provide token counts
+                )
+                
                 return ConversationResult(
-                    success=False,
-                    error="Failed to create agent"
+                    success=True,
+                    transcript=turns,
+                    raw_transcript=raw_transcript,
+                    agent_id=agent_id,
+                    conversation_id=None,  # WebSocket doesn't return this directly
+                    duration_seconds=duration
                 )
             
-            # Step 2: Get signed URL for WebSocket
-            signed_url = await self._get_signed_url(agent_id)
-            
-            if not signed_url:
+            except Exception as e:
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                
+                # Mark span as failed
+                set_voice_agent_result(
+                    agent_span,
+                    success=False,
+                    duration_seconds=duration
+                )
+                
+                # Capture exception in Sentry
+                sentry_sdk.capture_exception(e)
+                
                 return ConversationResult(
                     success=False,
                     agent_id=agent_id,
-                    error="Failed to get signed URL"
+                    duration_seconds=duration,
+                    error=str(e)
                 )
             
-            # Step 3: Run conversation via WebSocket
-            debug_mode = os.getenv("ELEVENLABS_DEBUG", "").lower() in ("1", "true", "yes")
-            turns = await self._run_websocket_conversation(
-                signed_url=signed_url,
-                test_input=test_input,
-                debug=debug_mode
-            )
-            
-            # Build raw transcript
-            raw_lines = [f"{turn.role}: {turn.content}" for turn in turns]
-            raw_transcript = "\n".join(raw_lines)
-            
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
-            return ConversationResult(
-                success=True,
-                transcript=turns,
-                raw_transcript=raw_transcript,
-                agent_id=agent_id,
-                conversation_id=None,  # WebSocket doesn't return this directly
-                duration_seconds=duration
-            )
-        
-        except Exception as e:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-            return ConversationResult(
-                success=False,
-                agent_id=agent_id,
-                duration_seconds=duration,
-                error=str(e)
-            )
-        
-        finally:
-            # Step 4: Clean up agent
-            if agent_id:
-                try:
-                    await self._delete_agent(agent_id)
-                except Exception as e:
-                    print(f"Warning: Failed to cleanup agent {agent_id}: {e}")
+            finally:
+                # Step 4: Clean up agent
+                if agent_id:
+                    try:
+                        await self._delete_agent(agent_id)
+                    except Exception as e:
+                        print(f"Warning: Failed to cleanup agent {agent_id}: {e}")
     
     async def cleanup(self, agent_id: str) -> bool:
         """Clean up a specific agent."""

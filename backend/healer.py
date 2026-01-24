@@ -41,7 +41,9 @@ from config.sentry import (
     start_fix_generation_span,
     set_iteration_result,
     add_breadcrumb,
-    is_sentry_initialized
+    is_sentry_initialized,
+    start_tool_span,
+    set_tool_result
 )
 from sentry_api import get_sentry_api, SentryAPI
 
@@ -225,18 +227,25 @@ class AutonomousHealer:
             self._log(f"⚠️  Callback error (ignored): {e}")
     
     async def _create_sandbox(self, iteration: int) -> Optional[BaseSandbox]:
-        """Create a sandbox for this iteration."""
+        """Create a sandbox for this iteration with Sentry tool span."""
         if not self.use_sandbox:
             return None
         
-        try:
-            sandbox_name = f"heal-{self._session_id[:8]}-iter-{iteration}"
-            sandbox = await self._daytona_client.create_sandbox(name=sandbox_name)
-            self._log(f"Created sandbox: {sandbox.id}")
-            return sandbox
-        except Exception as e:
-            self._log(f"⚠️  Failed to create sandbox: {e}")
-            return None
+        sandbox_name = f"heal-{self._session_id[:8]}-iter-{iteration}"
+        
+        with start_tool_span(
+            tool_name="create_sandbox",
+            inputs={"sandbox_name": sandbox_name, "iteration": iteration}
+        ) as tool_span:
+            try:
+                sandbox = await self._daytona_client.create_sandbox(name=sandbox_name)
+                self._log(f"Created sandbox: {sandbox.id}")
+                set_tool_result(tool_span, output={"sandbox_id": sandbox.id}, success=True)
+                return sandbox
+            except Exception as e:
+                self._log(f"⚠️  Failed to create sandbox: {e}")
+                set_tool_result(tool_span, success=False, error=str(e))
+                return None
     
     async def _cleanup_sandbox(self, sandbox: Optional[BaseSandbox]):
         """Clean up a sandbox, handling errors gracefully."""
@@ -274,16 +283,35 @@ class AutonomousHealer:
         self,
         conversation_result: ConversationResult
     ) -> List[FailureDetection]:
-        """Detect failures in the conversation result."""
-        if not conversation_result.success:
-            # If conversation itself failed, that's a failure
-            return [FailureDetection(
-                type="conversation_error",
-                message=f"Conversation failed: {conversation_result.error}",
-                severity="critical"
-            )]
-        
-        return self._failure_detector.detect_failures(conversation_result)
+        """Detect failures in the conversation result with Sentry tool span."""
+        with start_tool_span(
+            tool_name="detect_failures",
+            inputs={"conversation_success": conversation_result.success}
+        ) as tool_span:
+            if not conversation_result.success:
+                # If conversation itself failed, that's a failure
+                failures = [FailureDetection(
+                    type="conversation_error",
+                    message=f"Conversation failed: {conversation_result.error}",
+                    severity="critical"
+                )]
+                set_tool_result(
+                    tool_span,
+                    output={"failure_count": 1, "types": ["conversation_error"]},
+                    success=True
+                )
+                return failures
+            
+            failures = self._failure_detector.detect_failures(conversation_result)
+            set_tool_result(
+                tool_span,
+                output={
+                    "failure_count": len(failures),
+                    "types": [f.type for f in failures]
+                },
+                success=True
+            )
+            return failures
     
     async def _generate_fix(
         self,
