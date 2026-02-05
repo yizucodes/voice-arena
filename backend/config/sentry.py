@@ -15,9 +15,15 @@ Features:
 import os
 import json
 import sentry_sdk
-from sentry_sdk.integrations.openai import OpenAIIntegration
 from typing import Optional, Any
 from contextlib import contextmanager
+
+try:
+    from sentry_sdk.integrations.openai import OpenAIIntegration
+    _openai_integration_available = True
+except (ImportError, Exception):
+    _openai_integration_available = False
+    print("[Sentry] Warning: OpenAI integration not available. AI request capturing will be limited.")
 
 # Environment variable names
 SENTRY_DSN_ENV = "SENTRY_DSN"
@@ -84,9 +90,9 @@ def init_sentry(
             integrations=[
                 OpenAIIntegration(
                     include_prompts=True,  # Capture all prompts
-                    tiktoken_encoding_name="cl100k_base"  # Token counting for GPT-4
+                    tiktoken_encoding_name="cl100k_base"
                 )
-            ],
+            ] if _openai_integration_available else [],
             
             # Enable full context capture for AI monitoring
             # IMPORTANT: send_default_pii=True is REQUIRED to capture AI inputs/outputs
