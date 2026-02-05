@@ -24,6 +24,7 @@ import {
   Heart,
   Code,
   Users,
+  Activity,
 } from "lucide-react";
 
 // =============================================================================
@@ -105,7 +106,15 @@ interface RedTeamResponse {
   error?: string;
 }
 
-type TestMode = "standard" | "red_team";
+interface SentryDemoResponse {
+  success: boolean;
+  events_generated: number;
+  error_types: string[];
+  sentry_dashboard_url: string;
+  message: string;
+}
+
+type TestMode = "standard" | "red_team" | "sentry_demo";
 
 // =============================================================================
 // Constants
@@ -204,13 +213,12 @@ function IterationCard({
 
   return (
     <div
-      className={`relative rounded-2xl border transition-all duration-300 overflow-hidden ${
-        isLoading
-          ? "bg-slate-900/50 border-cyan-500/30 animate-pulse"
-          : passed
+      className={`relative rounded-2xl border transition-all duration-300 overflow-hidden ${isLoading
+        ? "bg-slate-900/50 border-cyan-500/30 animate-pulse"
+        : passed
           ? "bg-emerald-500/5 border-emerald-500/30"
           : "bg-slate-900/50 border-red-500/30"
-      }`}
+        }`}
     >
       {/* Header */}
       <button
@@ -220,13 +228,12 @@ function IterationCard({
       >
         <div className="flex items-center gap-4">
           {/* Status Icon */}
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-            isLoading
-              ? "bg-cyan-500/10"
-              : passed
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isLoading
+            ? "bg-cyan-500/10"
+            : passed
               ? "bg-emerald-500/10"
               : "bg-red-500/10"
-          }`}>
+            }`}>
             {isLoading ? (
               <Loader2 className="w-6 h-6 text-cyan-400 animate-spin" />
             ) : passed ? (
@@ -240,18 +247,17 @@ function IterationCard({
             <h3 className="text-lg font-bold text-slate-200">
               Iteration {iteration.iteration}
             </h3>
-            <p className={`text-sm ${
-              isLoading
-                ? "text-cyan-400"
-                : passed
+            <p className={`text-sm ${isLoading
+              ? "text-cyan-400"
+              : passed
                 ? "text-emerald-400"
                 : "text-red-400"
-            }`}>
+              }`}>
               {isLoading
                 ? "Testing agent..."
                 : passed
-                ? "All tests passed!"
-                : `${iteration.failures.length} failure${iteration.failures.length > 1 ? "s" : ""} detected`}
+                  ? "All tests passed!"
+                  : `${iteration.failures.length} failure${iteration.failures.length > 1 ? "s" : ""} detected`}
             </p>
           </div>
         </div>
@@ -374,20 +380,18 @@ function AttackResultCard({
 }) {
   return (
     <div
-      className={`relative rounded-2xl border transition-all duration-300 overflow-hidden ${
-        attack.succeeded
-          ? "bg-red-500/5 border-red-500/30"
-          : "bg-emerald-500/5 border-emerald-500/30"
-      }`}
+      className={`relative rounded-2xl border transition-all duration-300 overflow-hidden ${attack.succeeded
+        ? "bg-red-500/5 border-red-500/30"
+        : "bg-emerald-500/5 border-emerald-500/30"
+        }`}
     >
       <button
         onClick={onToggle}
         className="w-full p-4 flex items-center justify-between text-left"
       >
         <div className="flex items-center gap-4">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-            attack.succeeded ? "bg-red-500/10" : "bg-emerald-500/10"
-          }`}>
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${attack.succeeded ? "bg-red-500/10" : "bg-emerald-500/10"
+            }`}>
             {attack.succeeded ? (
               <AlertTriangle className="w-5 h-5 text-red-400" />
             ) : (
@@ -480,19 +484,19 @@ function StatCard({
 export default function Home() {
   // Mode state
   const [testMode, setTestMode] = useState<TestMode>("standard");
-  
+
   // Standard mode state
   const [selectedScenario, setSelectedScenario] = useState<Scenario>(SCENARIOS[0]);
   const [customPrompt, setCustomPrompt] = useState(SCENARIOS[0].initial_prompt);
   const [customTestInput, setCustomTestInput] = useState(SCENARIOS[0].test_input);
   const [maxIterations, setMaxIterations] = useState(5);
-  
+
   // Red team mode state
   const [selectedCategory, setSelectedCategory] = useState<AttackCategory>(ATTACK_CATEGORIES[0]);
   const [redTeamPrompt, setRedTeamPrompt] = useState("You are a helpful customer support agent for TechCorp. Help users with their questions about our products and services.");
   const [attackBudget, setAttackBudget] = useState(5);
   const [maxHealingRounds, setMaxHealingRounds] = useState(2);
-  
+
   // Shared state
   const [useMock, setUseMock] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -502,6 +506,10 @@ export default function Home() {
   const [expandedAttack, setExpandedAttack] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Sentry Demo State
+  const [sentryLoading, setSentryLoading] = useState(false);
+  const [sentryResult, setSentryResult] = useState<SentryDemoResponse | null>(null);
 
   // Handlers
   const handleScenarioChange = (scenario: Scenario) => {
@@ -555,7 +563,7 @@ export default function Home() {
       });
 
       if (!response.ok) throw new Error(`API error: ${response.status} ${response.statusText}`);
-      
+
       const data: HealResponse = await response.json();
       setResult(data);
 
@@ -565,7 +573,7 @@ export default function Home() {
     } catch (err) {
       console.error("Error:", err);
       const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred";
-      
+
       if (errorMessage.includes("fetch") || errorMessage.includes("network") || errorMessage.includes("Failed")) {
         setError("Backend API not available. Make sure to run: cd backend && uvicorn main:app --port 8000");
       } else {
@@ -596,7 +604,7 @@ export default function Home() {
       });
 
       if (!response.ok) throw new Error(`API error: ${response.status} ${response.statusText}`);
-      
+
       const data: RedTeamResponse = await response.json();
       setRedTeamResult(data);
 
@@ -606,7 +614,7 @@ export default function Home() {
     } catch (err) {
       console.error("Error:", err);
       const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred";
-      
+
       if (errorMessage.includes("fetch") || errorMessage.includes("network") || errorMessage.includes("Failed")) {
         setError("Backend API not available. Make sure to run: cd backend && uvicorn main:app --port 8000");
       } else {
@@ -625,6 +633,30 @@ export default function Home() {
     }
   };
 
+  const handleTriggerSentryError = async (type: string, count: number = 1) => {
+    setSentryLoading(true);
+    setSentryResult(null);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/demo/sentry-error`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error_type: type, count }),
+      });
+
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+      const data: SentryDemoResponse = await response.json();
+      setSentryResult(data);
+    } catch (err) {
+      console.error("Error triggering Sentry event:", err);
+      setError("Failed to trigger Sentry event. Ensure backend is running.");
+    } finally {
+      setSentryLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto">
@@ -638,7 +670,7 @@ export default function Home() {
             <Sparkles className="w-4 h-4 text-cyan-400" />
             <span className="text-sm text-cyan-400 font-medium">Autonomous AI Testing</span>
           </div>
-          
+
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-4 tracking-tight">
             <span className="text-glow text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-cyan-300 to-emerald-400">
               Self-Healing
@@ -646,7 +678,7 @@ export default function Home() {
             <br />
             <span className="text-slate-100">Voice Agent</span>
           </h1>
-          
+
           <p className="text-lg text-slate-400 max-w-2xl mx-auto">
             The first voice agent that fixes itself. Watch GPT-4o automatically diagnose
             and repair agent failures in real-time.
@@ -664,25 +696,33 @@ export default function Home() {
             <div className="inline-flex p-1 rounded-2xl bg-slate-900/80 border border-slate-800">
               <button
                 onClick={() => handleModeChange("standard")}
-                className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 ${
-                  testMode === "standard"
-                    ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
-                    : "text-slate-400 hover:text-slate-300"
-                }`}
+                className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 ${testMode === "standard"
+                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
+                  : "text-slate-400 hover:text-slate-300"
+                  }`}
               >
                 <Shield className="w-4 h-4" />
                 Standard Testing
               </button>
               <button
                 onClick={() => handleModeChange("red_team")}
-                className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 ${
-                  testMode === "red_team"
-                    ? "bg-red-500/20 text-red-400 border border-red-500/30"
-                    : "text-slate-400 hover:text-slate-300"
-                }`}
+                className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 ${testMode === "red_team"
+                  ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                  : "text-slate-400 hover:text-slate-300"
+                  }`}
               >
                 <Target className="w-4 h-4" />
                 Red Team Attack
+              </button>
+              <button
+                onClick={() => handleModeChange("sentry_demo")}
+                className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 ${testMode === "sentry_demo"
+                  ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                  : "text-slate-400 hover:text-slate-300"
+                  }`}
+              >
+                <Activity className="w-4 h-4" />
+                Sentry Observability
               </button>
             </div>
           </div>
@@ -706,19 +746,16 @@ export default function Home() {
                   <button
                     key={scenario.id}
                     onClick={() => handleScenarioChange(scenario)}
-                    className={`p-4 rounded-xl border transition-all duration-300 text-left ${
-                      selectedScenario.id === scenario.id
-                        ? "bg-cyan-500/10 border-cyan-500/40 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
-                        : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-                    }`}
+                    className={`p-4 rounded-xl border transition-all duration-300 text-left ${selectedScenario.id === scenario.id
+                      ? "bg-cyan-500/10 border-cyan-500/40 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
+                      : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                      }`}
                   >
                     <div className="flex items-center gap-3 mb-2">
-                      <scenario.icon className={`w-5 h-5 ${
-                        selectedScenario.id === scenario.id ? "text-cyan-400" : "text-slate-500"
-                      }`} />
-                      <span className={`font-semibold ${
-                        selectedScenario.id === scenario.id ? "text-cyan-400" : "text-slate-300"
-                      }`}>
+                      <scenario.icon className={`w-5 h-5 ${selectedScenario.id === scenario.id ? "text-cyan-400" : "text-slate-500"
+                        }`} />
+                      <span className={`font-semibold ${selectedScenario.id === scenario.id ? "text-cyan-400" : "text-slate-300"
+                        }`}>
                         {scenario.name}
                       </span>
                     </div>
@@ -747,7 +784,7 @@ export default function Home() {
                     placeholder="Enter the agent's system prompt..."
                   />
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
                     Test Message
@@ -783,14 +820,12 @@ export default function Home() {
                   <label className="text-sm text-slate-400">Mock Mode:</label>
                   <button
                     onClick={() => setUseMock(!useMock)}
-                    className={`relative w-12 h-6 rounded-full border transition-colors ${
-                      useMock ? "bg-cyan-500/80 border-cyan-400/60" : "bg-slate-800/80 border-slate-700"
-                    }`}
+                    className={`relative w-12 h-6 rounded-full border transition-colors ${useMock ? "bg-cyan-500/80 border-cyan-400/60" : "bg-slate-800/80 border-slate-700"
+                      }`}
                   >
                     <div
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        useMock ? "translate-x-6" : "translate-x-0"
-                      }`}
+                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${useMock ? "translate-x-6" : "translate-x-0"
+                        }`}
                     />
                   </button>
                   <span className="text-xs text-slate-500">
@@ -839,19 +874,16 @@ export default function Home() {
                   <button
                     key={category.id}
                     onClick={() => handleCategoryChange(category)}
-                    className={`p-3 rounded-xl border transition-all duration-300 text-left ${
-                      selectedCategory.id === category.id
-                        ? "bg-red-500/10 border-red-500/40 shadow-[0_0_20px_rgba(239,68,68,0.15)]"
-                        : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-                    }`}
+                    className={`p-3 rounded-xl border transition-all duration-300 text-left ${selectedCategory.id === category.id
+                      ? "bg-red-500/10 border-red-500/40 shadow-[0_0_20px_rgba(239,68,68,0.15)]"
+                      : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                      }`}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <category.icon className={`w-4 h-4 ${
-                        selectedCategory.id === category.id ? "text-red-400" : "text-slate-500"
-                      }`} />
-                      <span className={`font-semibold text-xs ${
-                        selectedCategory.id === category.id ? "text-red-400" : "text-slate-300"
-                      }`}>
+                      <category.icon className={`w-4 h-4 ${selectedCategory.id === category.id ? "text-red-400" : "text-slate-500"
+                        }`} />
+                      <span className={`font-semibold text-xs ${selectedCategory.id === category.id ? "text-red-400" : "text-slate-300"
+                        }`}>
                         {category.name}
                       </span>
                     </div>
@@ -918,14 +950,12 @@ export default function Home() {
                   <label className="text-sm text-slate-400">Mock Mode:</label>
                   <button
                     onClick={() => setUseMock(!useMock)}
-                    className={`relative w-12 h-6 rounded-full border transition-colors ${
-                      useMock ? "bg-red-500/80 border-red-400/60" : "bg-slate-800/80 border-slate-700"
-                    }`}
+                    className={`relative w-12 h-6 rounded-full border transition-colors ${useMock ? "bg-red-500/80 border-red-400/60" : "bg-slate-800/80 border-slate-700"
+                      }`}
                   >
                     <div
-                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                        useMock ? "translate-x-6" : "translate-x-0"
-                      }`}
+                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${useMock ? "translate-x-6" : "translate-x-0"
+                        }`}
                     />
                   </button>
                   <span className="text-xs text-slate-500">
@@ -938,54 +968,54 @@ export default function Home() {
         )}
 
         {/* Start Button */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="flex justify-center mb-12"
-        >
-          <button
-            onClick={handleRunTest}
-            disabled={isRunning}
-            className={`group relative px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 ${
-              isRunning
+        {testMode !== "sentry_demo" && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="flex justify-center mb-12"
+          >
+            <button
+              onClick={handleRunTest}
+              disabled={isRunning}
+              className={`group relative px-8 py-4 rounded-2xl font-bold text-lg transition-all duration-300 ${isRunning
                 ? "bg-slate-800 text-slate-400 cursor-not-allowed"
                 : testMode === "standard"
-                ? "bg-gradient-to-r from-cyan-500 to-emerald-500 text-white hover:shadow-[0_0_40px_rgba(6,182,212,0.4)] hover:scale-105"
-                : "bg-gradient-to-r from-red-500 to-orange-500 text-white hover:shadow-[0_0_40px_rgba(239,68,68,0.4)] hover:scale-105"
-            }`}
-          >
-            <span className="flex items-center gap-3">
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  {testMode === "standard" ? "Healing in Progress..." : "Running Red Team Attack..."}
-                </>
-              ) : (
-                <>
-                  {testMode === "standard" ? (
-                    <>
-                      <Play className="w-6 h-6 transition-transform group-hover:scale-110" />
-                      Start Self-Healing
-                    </>
-                  ) : (
-                    <>
-                      <Target className="w-6 h-6 transition-transform group-hover:scale-110" />
-                      Launch Red Team Attack
-                    </>
-                  )}
-                </>
-              )}
-            </span>
-            {!isRunning && (
-              <div className={`absolute inset-0 rounded-2xl blur-xl opacity-30 group-hover:opacity-50 transition-opacity -z-10 ${
-                testMode === "standard"
+                  ? "bg-gradient-to-r from-cyan-500 to-emerald-500 text-white hover:shadow-[0_0_40px_rgba(6,182,212,0.4)] hover:scale-105"
+                  : "bg-gradient-to-r from-red-500 to-orange-500 text-white hover:shadow-[0_0_40px_rgba(239,68,68,0.4)] hover:scale-105"
+                }`}
+            >
+              <span className="flex items-center gap-3">
+                {isRunning ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    {testMode === "standard" ? "Healing in Progress..." : "Running Red Team Attack..."}
+                  </>
+                ) : (
+                  <>
+                    {testMode === "standard" ? (
+                      <>
+                        <Play className="w-6 h-6 transition-transform group-hover:scale-110" />
+                        Start Self-Healing
+                      </>
+                    ) : (
+                      <>
+                        <Target className="w-6 h-6 transition-transform group-hover:scale-110" />
+                        Launch Red Team Attack
+                      </>
+                    )}
+                  </>
+                )}
+              </span>
+              {!isRunning && (
+                <div className={`absolute inset-0 rounded-2xl blur-xl opacity-30 group-hover:opacity-50 transition-opacity -z-10 ${testMode === "standard"
                   ? "bg-gradient-to-r from-cyan-500 to-emerald-500"
                   : "bg-gradient-to-r from-red-500 to-orange-500"
-              }`} />
-            )}
-          </button>
-        </motion.div>
+                  }`} />
+              )}
+            </button>
+          </motion.div>
+        )}
 
         {/* Error Display */}
         <AnimatePresence>
@@ -1020,11 +1050,10 @@ export default function Home() {
                   Healing Progress
                 </h2>
                 {result && (
-                  <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${
-                    result.success
-                      ? "bg-emerald-500/10 border border-emerald-500/30"
-                      : "bg-red-500/10 border border-red-500/30"
-                  }`}>
+                  <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${result.success
+                    ? "bg-emerald-500/10 border border-emerald-500/30"
+                    : "bg-red-500/10 border border-red-500/30"
+                    }`}>
                     {result.success ? (
                       <>
                         <CheckCircle2 className="w-5 h-5 text-emerald-400" />
@@ -1056,10 +1085,10 @@ export default function Home() {
                     }}
                     isLoading={true}
                     isExpanded={false}
-                    onToggle={() => {}}
+                    onToggle={() => { }}
                   />
                 )}
-                
+
                 {result?.iterations.map((iteration, index) => (
                   <motion.div
                     key={iteration.iteration}
@@ -1140,11 +1169,10 @@ export default function Home() {
                   Red Team Results
                 </h2>
                 {redTeamResult && (
-                  <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${
-                    redTeamResult.success
-                      ? "bg-emerald-500/10 border border-emerald-500/30"
-                      : "bg-red-500/10 border border-red-500/30"
-                  }`}>
+                  <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${redTeamResult.success
+                    ? "bg-emerald-500/10 border border-emerald-500/30"
+                    : "bg-red-500/10 border border-red-500/30"
+                    }`}>
                     {redTeamResult.success ? (
                       <>
                         <Shield className="w-5 h-5 text-emerald-400" />
@@ -1177,25 +1205,25 @@ export default function Home() {
               {redTeamResult && (
                 <>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    <StatCard 
-                      label="Initial Vulnerabilities" 
-                      value={redTeamResult.initial_vulnerabilities.toString()} 
-                      color="red" 
+                    <StatCard
+                      label="Initial Vulnerabilities"
+                      value={redTeamResult.initial_vulnerabilities.toString()}
+                      color="red"
                     />
-                    <StatCard 
-                      label="Final Vulnerabilities" 
-                      value={redTeamResult.final_vulnerabilities.toString()} 
-                      color={redTeamResult.final_vulnerabilities === 0 ? "emerald" : "amber"} 
+                    <StatCard
+                      label="Final Vulnerabilities"
+                      value={redTeamResult.final_vulnerabilities.toString()}
+                      color={redTeamResult.final_vulnerabilities === 0 ? "emerald" : "amber"}
                     />
-                    <StatCard 
-                      label="Reduction" 
-                      value={`${(redTeamResult.vulnerability_reduction * 100).toFixed(0)}%`} 
-                      color="cyan" 
+                    <StatCard
+                      label="Reduction"
+                      value={`${(redTeamResult.vulnerability_reduction * 100).toFixed(0)}%`}
+                      color="cyan"
                     />
-                    <StatCard 
-                      label="Duration" 
-                      value={`${redTeamResult.total_duration_seconds.toFixed(1)}s`} 
-                      color="purple" 
+                    <StatCard
+                      label="Duration"
+                      value={`${redTeamResult.total_duration_seconds.toFixed(1)}s`}
+                      color="purple"
                     />
                   </div>
 
@@ -1274,16 +1302,14 @@ export default function Home() {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.5 }}
-                      className={`p-6 rounded-2xl ${
-                        redTeamResult.success 
-                          ? "bg-emerald-500/5 border-emerald-500/20" 
-                          : "bg-amber-500/5 border-amber-500/20"
-                      } border`}
+                      className={`p-6 rounded-2xl ${redTeamResult.success
+                        ? "bg-emerald-500/5 border-emerald-500/20"
+                        : "bg-amber-500/5 border-amber-500/20"
+                        } border`}
                     >
                       <div className="flex items-center justify-between mb-4">
-                        <h3 className={`text-lg font-bold flex items-center gap-2 ${
-                          redTeamResult.success ? "text-emerald-400" : "text-amber-400"
-                        }`}>
+                        <h3 className={`text-lg font-bold flex items-center gap-2 ${redTeamResult.success ? "text-emerald-400" : "text-amber-400"
+                          }`}>
                           {redTeamResult.success ? (
                             <>
                               <Shield className="w-5 h-5" />
@@ -1298,11 +1324,10 @@ export default function Home() {
                         </h3>
                         <button
                           onClick={copyFinalPrompt}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
-                            redTeamResult.success
-                              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
-                              : "bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20"
-                          }`}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${redTeamResult.success
+                            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                            : "bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20"
+                            }`}
                         >
                           {copied ? (
                             <><Check className="w-4 h-4" />Copied!</>
@@ -1325,6 +1350,100 @@ export default function Home() {
               )}
             </motion.section>
           </AnimatePresence>
+        )}
+
+        {/* Sentry Demo Mode UI */}
+        {testMode === "sentry_demo" && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3 }}
+          >
+            {/* Header Banner */}
+            <div className="mb-8 p-6 rounded-2xl bg-purple-500/5 border border-purple-500/20 text-center">
+              <div className="inline-flex p-3 rounded-xl bg-purple-500/10 mb-4">
+                <Activity className="w-8 h-8 text-purple-400" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-100 mb-2">Live Observability Demo</h2>
+              <p className="text-slate-400 max-w-2xl mx-auto">
+                Trigger real errors in the voice agent backend and watch them appear instantly in Sentry.
+                Showcase fingerprinting, performance tracing, and AI-specific context.
+              </p>
+            </div>
+
+            {/* Controls Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+              {[
+                { id: "rate_limit", name: "Rate Limit Exceeded", desc: "Simulate API 429 quota limits", color: "orange" },
+                { id: "prompt_injection", name: "Prompt Injection", desc: "Trigger security alert & block", color: "red" },
+                { id: "transcription_failure", name: "Transcription Failure", desc: "Low confidence audio processing", color: "yellow" },
+                { id: "api_timeout", name: "API Latency/Timeout", desc: "Long duration performance span", color: "amber" },
+                { id: "conversation_loop", name: "Conversation Loop", desc: "Agent stuck in repetition", color: "cyan" },
+                { id: "token_limit", name: "Token Limit Exceeded", desc: "Context window overflow", color: "blue" },
+              ].map((err) => (
+                <button
+                  key={err.id}
+                  onClick={() => handleTriggerSentryError(err.id)}
+                  disabled={sentryLoading}
+                  className={`group p-4 rounded-xl border text-left transition-all hover:scale-[1.02] ${sentryLoading ? "opacity-50 cursor-not-allowed" : "hover:shadow-lg"
+                    } bg-slate-900/50 border-slate-800 hover:border-${err.color}-500/50`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`font-semibold text-${err.color}-400 group-hover:text-${err.color}-300`}>
+                      {err.name}
+                    </span>
+                    <Zap className={`w-4 h-4 text-${err.color}-500/50 group-hover:text-${err.color}-400`} />
+                  </div>
+                  <p className="text-xs text-slate-500">{err.desc}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Batch Action */}
+            <div className="flex justify-center mb-12">
+              <button
+                onClick={() => handleTriggerSentryError("random", 5)}
+                disabled={sentryLoading}
+                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-lg hover:shadow-[0_0_30px_rgba(147,51,234,0.3)] hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3"
+              >
+                {sentryLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                Populate Dashboard (5 Random Events)
+              </button>
+            </div>
+
+            {/* Result Display */}
+            <AnimatePresence>
+              {sentryResult && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="max-w-2xl mx-auto p-6 rounded-2xl bg-slate-900 border border-purple-500/30 shadow-[0_0_50px_rgba(168,85,247,0.1)]"
+                >
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center">
+                      <CheckCircle2 className="w-6 h-6 text-green-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Event Captured!</h3>
+                      <p className="text-slate-400 text-sm">{sentryResult.message}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <a
+                      href={sentryResult.sentry_dashboard_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 transition-colors font-mono text-sm"
+                    >
+                      View in Sentry Dashboard <Play className="w-4 h-4 ml-1" />
+                    </a>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
         )}
 
         {/* Footer */}
