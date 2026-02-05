@@ -234,6 +234,8 @@ Voice agents are vulnerable to prompt injection, social engineering, and securit
 - **Sentry Integration** - Full AI agent tracing and error capture
 - **Real-time Updates** - WebSocket-powered live iteration results
 - **Session Management** - Track and retrieve healing session states
+- **Interactive Demo Panel** - Trigger real backend errors (Rate Limit, PII) directly from the frontend
+
 
 ---
 
@@ -312,6 +314,8 @@ curl -X POST http://localhost:8000/self-heal \
 | `/demo/quick-heal` | POST | One-click demo (mock mode) |
 | `/red-team/categories` | GET | List available attack categories |
 | `/sessions/{id}` | GET | Get session state |
+| `/demo/sentry-error` | POST | Trigger demo Sentry events |
+
 
 ### WebSocket
 
@@ -464,6 +468,13 @@ voice-arena/
 - Real GPT-4o fix generation (always uses real API)
 - Real Daytona sandboxes (if enabled)
 - API costs apply
+
+### Sentry Demo Mode
+- Access via the **Sentry Observability** tab in the frontend
+- Trigger synthetic errors (Rate Limit, Prompt Injection, Latency)
+- View generated Sentry Issue IDs and direct dashboard links
+- "Populate Dashboard" feature for rapid interview demonstration
+
 
 ### Running Tests
 
