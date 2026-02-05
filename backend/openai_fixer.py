@@ -36,6 +36,12 @@ DEFAULT_TEMPERATURE = 0.3
 MAX_PROMPT_LENGTH = 2000
 MAX_TRANSCRIPT_LENGTH = 2000
 
+# Retry configuration for rate limiting
+MAX_RETRIES = 5
+INITIAL_RETRY_DELAY = 2.0  # seconds
+MAX_RETRY_DELAY = 60.0  # seconds
+RETRY_BACKOFF_MULTIPLIER = 2.0
+
 
 # =============================================================================
 # System Prompt for Fix Generation
@@ -146,6 +152,80 @@ RESPONSE RULES:
 - A minimal response is better than no response"""
     }
 }
+
+
+# =============================================================================
+# Retry Logic with Exponential Backoff
+# =============================================================================
+
+async def retry_with_backoff(
+    func,
+    max_retries: int = MAX_RETRIES,
+    initial_delay: float = INITIAL_RETRY_DELAY,
+    max_delay: float = MAX_RETRY_DELAY,
+    backoff_multiplier: float = RETRY_BACKOFF_MULTIPLIER,
+    operation_name: str = "operation"
+):
+    """
+    Retry an async function with exponential backoff.
+    
+    Handles rate limiting (429) and temporary failures gracefully.
+    """
+    import re as regex_module
+    
+    last_exception = None
+    delay = initial_delay
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await func()
+        
+        except Exception as e:
+            last_exception = e
+            error_str = str(e).lower()
+            
+            # Check if this is a rate limit error (429)
+            is_rate_limit = (
+                "429" in str(e) or
+                "rate_limit" in error_str or
+                "rate limit" in error_str or
+                "too many requests" in error_str
+            )
+            
+            # Check if this is a temporary error worth retrying
+            is_retryable = (
+                is_rate_limit or
+                "timeout" in error_str or
+                "connection" in error_str or
+                "503" in str(e) or
+                "502" in str(e)
+            )
+            
+            if not is_retryable or attempt == max_retries:
+                print(f"[OpenAIFixer] ❌ {operation_name} failed after {attempt} attempts: {e}")
+                raise
+            
+            # Calculate delay with jitter
+            actual_delay = min(delay, max_delay)
+            
+            # Extract retry-after hint from error message
+            if is_rate_limit and "try again in" in error_str:
+                try:
+                    match = regex_module.search(r'try again in (\d+(?:\.\d+)?)', error_str)
+                    if match:
+                        suggested_delay = float(match.group(1))
+                        actual_delay = max(actual_delay, suggested_delay + 1)
+                except Exception:
+                    pass
+            
+            print(f"[OpenAIFixer] ⚠️  {operation_name} attempt {attempt}/{max_retries} failed "
+                  f"({'rate limit' if is_rate_limit else 'error'}). "
+                  f"Retrying in {actual_delay:.1f}s...")
+            
+            await asyncio.sleep(actual_delay)
+            delay = min(delay * backoff_multiplier, max_delay)
+    
+    raise last_exception or RuntimeError(f"{operation_name} failed")
 
 
 # =============================================================================
@@ -579,9 +659,9 @@ class OpenAIFixer(BaseOpenAIFixer):
         sentry_context: Optional[str] = None
     ) -> FixResult:
         """
-        Generate a fix using GPT-4o.
+        Generate a fix using GPT-4o with retry logic.
         
-        Falls back to hardcoded fixes if API or parsing fails.
+        Falls back to hardcoded fixes if API or parsing fails after retries.
         
         Args:
             failures: List of detected failures
@@ -592,18 +672,17 @@ class OpenAIFixer(BaseOpenAIFixer):
         """
         start_time = datetime.now(timezone.utc)
         
-        try:
-            # Build prompts (now includes Sentry context if available)
-            user_prompt = build_user_prompt(
-                failures=failures,
-                current_prompt=current_prompt,
-                transcript=transcript,
-                iteration=iteration,
-                sentry_context=sentry_context
-            )
-            
-            # Make API call
-            response = await self._client.chat.completions.create(
+        # Build prompts (now includes Sentry context if available)
+        user_prompt = build_user_prompt(
+            failures=failures,
+            current_prompt=current_prompt,
+            transcript=transcript,
+            iteration=iteration,
+            sentry_context=sentry_context
+        )
+        
+        async def _make_api_call():
+            return await self._client.chat.completions.create(
                 model=self._model,
                 messages=[
                     {"role": "system", "content": FIX_SYSTEM_PROMPT},
@@ -612,6 +691,13 @@ class OpenAIFixer(BaseOpenAIFixer):
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
                 response_format={"type": "json_object"}
+            )
+        
+        try:
+            # Make API call with retry logic
+            response = await retry_with_backoff(
+                _make_api_call,
+                operation_name="fix_generation"
             )
             
             # Extract response
@@ -636,7 +722,7 @@ class OpenAIFixer(BaseOpenAIFixer):
                 )
             else:
                 # JSON parsing failed - use fallback
-                print(f"⚠️  JSON parsing failed for response: {content[:200]}...")
+                print(f"[OpenAIFixer] ⚠️  JSON parsing failed, using fallback fix")
                 fallback_result = generate_fallback_fix(failures, current_prompt)
                 fallback_result.tokens_used = tokens_used
                 fallback_result.duration_seconds = (
@@ -645,11 +731,11 @@ class OpenAIFixer(BaseOpenAIFixer):
                 return fallback_result
         
         except Exception as e:
-            print(f"⚠️  OpenAI API call failed: {e}")
+            print(f"[OpenAIFixer] ⚠️  API call failed after retries: {e}")
             
-            # Use fallback fix
+            # Use fallback fix - still a valid fix, just not AI-generated
             fallback_result = generate_fallback_fix(failures, current_prompt)
-            fallback_result.error = str(e)
+            fallback_result.error = str(e)[:200]
             fallback_result.duration_seconds = (
                 datetime.now(timezone.utc) - start_time
             ).total_seconds()

@@ -11,6 +11,7 @@ Key features:
 - Supports both real API calls and mock mode
 - Handles errors gracefully without crashing
 - Sentry integration for AI Agent monitoring and self-healing context
+- Red Team Mode: AI-powered adversarial attack testing with GPT-4o
 """
 
 import asyncio
@@ -32,6 +33,17 @@ from elevenlabs_client import (
     FailureDetection
 )
 from openai_fixer import get_openai_fixer, BaseOpenAIFixer, FixResult
+
+# Red Team components
+from red_team_attacker import (
+    create_red_team_runner,
+    RedTeamRunner,
+    RedTeamResult,
+    ComprehensiveRedTeamResult,
+    AttackCategory,
+    AttackResult,
+    get_attack_generator
+)
 
 # Sentry integration
 from config.sentry import (
@@ -117,6 +129,83 @@ class HealingResult:
         }
 
 
+@dataclass
+class RedTeamHealingResult:
+    """Result from red team testing with auto-healing."""
+    success: bool
+    session_id: str
+    initial_prompt: str
+    final_prompt: Optional[str] = None
+    healing_rounds: int = 0
+    
+    # Red team metrics
+    initial_vulnerabilities: int = 0
+    final_vulnerabilities: int = 0
+    vulnerability_reduction: float = 0.0
+    
+    # Detailed results
+    red_team_results: List[RedTeamResult] = field(default_factory=list)
+    healing_iterations: List[IterationResult] = field(default_factory=list)
+    
+    # Categories tested
+    categories_tested: List[str] = field(default_factory=list)
+    categories_secured: List[str] = field(default_factory=list)
+    categories_vulnerable: List[str] = field(default_factory=list)
+    
+    total_duration_seconds: float = 0.0
+    error: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            "success": self.success,
+            "session_id": self.session_id,
+            "initial_prompt": self.initial_prompt[:500],
+            "final_prompt": self.final_prompt[:500] if self.final_prompt else None,
+            "healing_rounds": self.healing_rounds,
+            "initial_vulnerabilities": self.initial_vulnerabilities,
+            "final_vulnerabilities": self.final_vulnerabilities,
+            "vulnerability_reduction": self.vulnerability_reduction,
+            "red_team_results": [r.to_dict() for r in self.red_team_results],
+            "healing_iterations": [i.to_dict() for i in self.healing_iterations],
+            "categories_tested": self.categories_tested,
+            "categories_secured": self.categories_secured,
+            "categories_vulnerable": self.categories_vulnerable,
+            "total_duration_seconds": self.total_duration_seconds,
+            "error": self.error
+        }
+    
+    def generate_report(self) -> str:
+        """Generate a human-readable report."""
+        lines = [
+            "Red Team Self-Healing Report",
+            "═" * 50,
+            f"Session ID: {self.session_id}",
+            f"Status: {'✅ SECURED' if self.success else '⚠️ VULNERABILITIES REMAIN'}",
+            f"Healing Rounds: {self.healing_rounds}",
+            f"Duration: {self.total_duration_seconds:.2f}s",
+            "",
+            "Vulnerability Metrics:",
+            f"  Initial: {self.initial_vulnerabilities}",
+            f"  Final: {self.final_vulnerabilities}",
+            f"  Reduction: {self.vulnerability_reduction:.1%}",
+            "",
+        ]
+        
+        if self.categories_secured:
+            lines.append("✅ Secured Categories:")
+            for cat in self.categories_secured:
+                lines.append(f"   • {cat}")
+        
+        if self.categories_vulnerable:
+            lines.append("")
+            lines.append("⚠️ Still Vulnerable:")
+            for cat in self.categories_vulnerable:
+                lines.append(f"   • {cat}")
+        
+        return "\n".join(lines)
+
+
 # =============================================================================
 # Callback Type Definition
 # =============================================================================
@@ -168,7 +257,7 @@ class AutonomousHealer:
         
         Args:
             max_iterations: Maximum number of healing attempts (1-10)
-            use_mock: Use mock services (no real API calls)
+            use_mock: Use mock services (no real API calls) - Note: GPT-4o fixer always uses real API
             use_sandbox: Use Daytona sandbox for isolation
             on_iteration_complete: Callback function called after each iteration
             verbose: Print status messages
@@ -202,13 +291,14 @@ class AutonomousHealer:
         """Initialize all client instances."""
         self._daytona_client = get_daytona_client(use_mock=self.use_mock)
         self._elevenlabs_client = get_elevenlabs_client(use_mock=self.use_mock)
-        self._openai_fixer = get_openai_fixer(use_mock=self.use_mock)
+        # Always use real GPT-4o fixer (even in mock mode for other services)
+        self._openai_fixer = get_openai_fixer(use_mock=False)
         self._sentry_api = get_sentry_api(use_mock=self.use_mock)
         
         self._log(f"Initialized clients (mock={self.use_mock})")
         self._log(f"  Daytona: {type(self._daytona_client).__name__}")
         self._log(f"  ElevenLabs: {type(self._elevenlabs_client).__name__}")
-        self._log(f"  OpenAI: {type(self._openai_fixer).__name__}")
+        self._log(f"  OpenAI: {type(self._openai_fixer).__name__} (always real GPT-4o)")
         self._log(f"  Sentry API: {type(self._sentry_api).__name__}")
         self._log(f"  Sentry SDK initialized: {is_sentry_initialized()}")
     
@@ -654,6 +744,337 @@ class AutonomousHealer:
             test_input=", ".join(test_inputs),
             total_duration_seconds=total_duration
         )
+    
+    # =========================================================================
+    # Red Team Mode Methods
+    # =========================================================================
+    
+    async def red_team_heal(
+        self,
+        initial_prompt: str,
+        attack_category: str = "security_leak",
+        attack_budget: int = 10,
+        max_healing_rounds: int = 3,
+        stop_on_secure: bool = True
+    ) -> RedTeamHealingResult:
+        """
+        Run red team testing with automatic healing.
+        
+        This method:
+        1. Runs AI-generated attacks against the agent
+        2. If vulnerabilities found, generates fixes
+        3. Re-runs red team to verify the fix
+        4. Iterates until secure or max rounds reached
+        
+        Args:
+            initial_prompt: The agent's starting system prompt
+            attack_category: Category of attacks to test (e.g., "security_leak")
+            attack_budget: Number of attacks per red team round
+            max_healing_rounds: Maximum fix-and-test cycles
+            stop_on_secure: Stop when no vulnerabilities found
+        
+        Returns:
+            RedTeamHealingResult with complete test and healing history
+        """
+        start_time = datetime.now(timezone.utc)
+        session_id = str(uuid.uuid4())[:12]
+        
+        self._log("=" * 60)
+        self._log(f"Starting Red Team Self-Healing: {session_id}")
+        self._log(f"Category: {attack_category}")
+        self._log(f"Attack budget: {attack_budget}")
+        self._log(f"Max healing rounds: {max_healing_rounds}")
+        self._log("=" * 60)
+        
+        # Initialize clients
+        await self._initialize_clients()
+        
+        # Create red team runner
+        red_team_runner = create_red_team_runner(
+            use_mock=self.use_mock,
+            attack_budget=attack_budget,
+            verbose=self._verbose,
+            agent_tester=self._elevenlabs_client
+        )
+        
+        # Parse attack category
+        try:
+            category = AttackCategory(attack_category)
+        except ValueError:
+            category = AttackCategory.SECURITY_LEAK
+        
+        current_prompt = initial_prompt
+        red_team_results: List[RedTeamResult] = []
+        healing_iterations: List[IterationResult] = []
+        initial_vulns = 0
+        
+        for round_num in range(1, max_healing_rounds + 1):
+            self._log(f"\n{'='*50}")
+            self._log(f"Red Team Round {round_num}/{max_healing_rounds}")
+            self._log(f"{'='*50}")
+            
+            # Run red team attacks
+            red_team_result = await red_team_runner.run_red_team_test(
+                target_prompt=current_prompt,
+                category=category,
+                stop_on_success=False  # Test all attacks in budget
+            )
+            red_team_results.append(red_team_result)
+            
+            # Track initial vulnerabilities from first round
+            if round_num == 1:
+                initial_vulns = red_team_result.successful_attacks
+            
+            self._log(f"Vulnerabilities found: {red_team_result.successful_attacks}")
+            
+            # Check if secure
+            if red_team_result.successful_attacks == 0:
+                self._log("✅ No vulnerabilities found - agent is secure!")
+                if stop_on_secure:
+                    break
+            else:
+                # Generate fix for each successful attack
+                self._log(f"⚠️  Found {red_team_result.successful_attacks} vulnerabilities")
+                
+                # Get the successful attacks
+                successful_attacks = [
+                    r for r in red_team_result.attack_results if r.succeeded
+                ]
+                
+                # Always try to generate fix when vulnerabilities exist (even on last round for reporting)
+                if successful_attacks:
+                    self._log(f"Generating fix for {len(successful_attacks)} successful attacks...")
+                    
+                    # Convert to failure format for the fixer
+                    failures = [
+                        FailureDetection(
+                            type=attack.failure_type,
+                            message=f"Attack succeeded: {attack.attack.technique}",
+                            severity="critical",
+                            evidence=attack.evidence
+                        )
+                        for attack in successful_attacks
+                    ]
+                    
+                    # Log the attack techniques for debugging
+                    for i, attack in enumerate(successful_attacks[:3], 1):
+                        self._log(f"   Vulnerability {i}: {attack.attack.technique}")
+                        if attack.evidence:
+                            self._log(f"      Evidence: {attack.evidence[:80]}...")
+                    
+                    # Get Sentry context
+                    sentry_context = None
+                    try:
+                        sentry_issue = await self._sentry_api.get_latest_issue()
+                        if sentry_issue:
+                            sentry_context = sentry_issue.to_gpt_context()
+                            self._log("   Got Sentry context for GPT-4o")
+                    except Exception as e:
+                        self._log(f"   ⚠️  Could not get Sentry context: {str(e)[:50]}")
+                    
+                    # Combine attack transcripts
+                    combined_transcript = "\n".join([
+                        f"Attack: {a.attack.message}\nResponse: {a.agent_response[:200]}"
+                        for a in successful_attacks[:3]
+                    ])
+                    
+                    # Generate fix with better error handling
+                    try:
+                        fix_result = await self._generate_fix(
+                            failures=failures,
+                            current_prompt=current_prompt,
+                            transcript=combined_transcript,
+                            iteration=round_num,
+                            sentry_context=sentry_context
+                        )
+                        
+                        if fix_result.success and fix_result.improved_prompt:
+                            current_prompt = fix_result.improved_prompt
+                            self._log(f"✅ Fix applied (confidence: {fix_result.confidence:.2f})")
+                            self._log(f"   Diagnosis: {fix_result.diagnosis[:100]}..." if fix_result.diagnosis else "")
+                            
+                            # Record healing iteration
+                            healing_iterations.append(IterationResult(
+                                iteration=round_num,
+                                passed=False,
+                                failures=[f.to_dict() for f in failures],
+                                fix_applied=fix_result.improved_prompt,
+                                diagnosis=fix_result.diagnosis,
+                                confidence=fix_result.confidence,
+                                timestamp=datetime.now(timezone.utc).isoformat()
+                            ))
+                            
+                            # Capture to Sentry
+                            capture_agent_failure(
+                                test_input=successful_attacks[0].attack.message,
+                                agent_output=successful_attacks[0].agent_response[:500],
+                                failures=[f.to_dict() for f in failures],
+                                iteration=round_num,
+                                sandbox_id=None,
+                                prompt_used=current_prompt
+                            )
+                            
+                            # If this was the last round, test the fixed prompt to verify it works
+                            if round_num == max_healing_rounds:
+                                self._log(f"\n--- Verification Round ---")
+                                self._log("Testing fixed prompt to verify the fix works...")
+                                
+                                verification_result = await red_team_runner.run_red_team_test(
+                                    target_prompt=current_prompt,
+                                    category=category,
+                                    stop_on_success=False,
+                                    attack_budget=min(attack_budget, 5)  # Smaller budget for verification
+                                )
+                                red_team_results.append(verification_result)
+                                
+                                if verification_result.successful_attacks == 0:
+                                    self._log("✅ Verification passed - fix eliminated all vulnerabilities!")
+                                else:
+                                    self._log(f"⚠️  Verification: {verification_result.successful_attacks} vulnerabilities remain after fix")
+                        else:
+                            self._log(f"❌ Fix generation failed: {fix_result.error or 'No improved prompt returned'}")
+                    except Exception as e:
+                        self._log(f"❌ Fix generation error: {str(e)[:100]}")
+                        sentry_sdk.capture_exception(e)
+        
+        # Calculate final metrics
+        total_duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        final_vulns = red_team_results[-1].successful_attacks if red_team_results else 0
+        vuln_reduction = (initial_vulns - final_vulns) / initial_vulns if initial_vulns > 0 else 1.0
+        
+        success = final_vulns == 0
+        
+        self._log("\n" + "=" * 60)
+        self._log(f"Red Team Healing Complete: {session_id}")
+        self._log(f"Status: {'SECURED' if success else 'VULNERABILITIES REMAIN'}")
+        self._log(f"Initial vulnerabilities: {initial_vulns}")
+        self._log(f"Final vulnerabilities: {final_vulns}")
+        self._log(f"Reduction: {vuln_reduction:.1%}")
+        self._log("=" * 60)
+        
+        return RedTeamHealingResult(
+            success=success,
+            session_id=session_id,
+            initial_prompt=initial_prompt,
+            final_prompt=current_prompt,
+            healing_rounds=len(red_team_results),
+            initial_vulnerabilities=initial_vulns,
+            final_vulnerabilities=final_vulns,
+            vulnerability_reduction=vuln_reduction,
+            red_team_results=red_team_results,
+            healing_iterations=healing_iterations,
+            categories_tested=[attack_category],
+            categories_secured=[attack_category] if success else [],
+            categories_vulnerable=[attack_category] if not success else [],
+            total_duration_seconds=total_duration
+        )
+    
+    async def comprehensive_red_team_heal(
+        self,
+        initial_prompt: str,
+        categories: Optional[List[str]] = None,
+        attacks_per_category: int = 5,
+        max_healing_rounds: int = 3
+    ) -> RedTeamHealingResult:
+        """
+        Run comprehensive red team testing across multiple attack categories.
+        
+        Tests the agent against various attack types and applies fixes
+        for each category where vulnerabilities are found.
+        
+        Args:
+            initial_prompt: The agent's starting system prompt
+            categories: List of attack categories to test (default: all)
+            attacks_per_category: Number of attacks per category
+            max_healing_rounds: Maximum fix cycles per category
+        
+        Returns:
+            RedTeamHealingResult with comprehensive findings
+        """
+        start_time = datetime.now(timezone.utc)
+        session_id = str(uuid.uuid4())[:12]
+        
+        # Default to key categories
+        if categories is None:
+            categories = [
+                "security_leak",
+                "social_engineering",
+                "policy_violation",
+                "jailbreak"
+            ]
+        
+        self._log("=" * 60)
+        self._log(f"Comprehensive Red Team Assessment: {session_id}")
+        self._log(f"Categories: {categories}")
+        self._log("=" * 60)
+        
+        current_prompt = initial_prompt
+        all_red_team_results: List[RedTeamResult] = []
+        all_healing_iterations: List[IterationResult] = []
+        categories_secured: List[str] = []
+        categories_vulnerable: List[str] = []
+        total_initial_vulns = 0
+        total_final_vulns = 0
+        
+        for category in categories:
+            self._log(f"\n{'─'*50}")
+            self._log(f"Testing: {category}")
+            self._log(f"{'─'*50}")
+            
+            result = await self.red_team_heal(
+                initial_prompt=current_prompt,
+                attack_category=category,
+                attack_budget=attacks_per_category,
+                max_healing_rounds=max_healing_rounds,
+                stop_on_secure=True
+            )
+            
+            # Aggregate results
+            all_red_team_results.extend(result.red_team_results)
+            all_healing_iterations.extend(result.healing_iterations)
+            total_initial_vulns += result.initial_vulnerabilities
+            total_final_vulns += result.final_vulnerabilities
+            
+            if result.success:
+                categories_secured.append(category)
+                self._log(f"✅ {category}: SECURED")
+            else:
+                categories_vulnerable.append(category)
+                self._log(f"⚠️ {category}: VULNERABLE")
+            
+            # Carry forward improved prompt
+            if result.final_prompt:
+                current_prompt = result.final_prompt
+        
+        total_duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        overall_success = len(categories_vulnerable) == 0
+        vuln_reduction = (
+            (total_initial_vulns - total_final_vulns) / total_initial_vulns
+            if total_initial_vulns > 0 else 1.0
+        )
+        
+        self._log("\n" + "=" * 60)
+        self._log("Comprehensive Assessment Complete")
+        self._log(f"Overall: {'SECURED' if overall_success else 'VULNERABILITIES REMAIN'}")
+        self._log(f"Secured: {len(categories_secured)}/{len(categories)}")
+        self._log("=" * 60)
+        
+        return RedTeamHealingResult(
+            success=overall_success,
+            session_id=session_id,
+            initial_prompt=initial_prompt,
+            final_prompt=current_prompt,
+            healing_rounds=len(all_red_team_results),
+            initial_vulnerabilities=total_initial_vulns,
+            final_vulnerabilities=total_final_vulns,
+            vulnerability_reduction=vuln_reduction,
+            red_team_results=all_red_team_results,
+            healing_iterations=all_healing_iterations,
+            categories_tested=categories,
+            categories_secured=categories_secured,
+            categories_vulnerable=categories_vulnerable,
+            total_duration_seconds=total_duration
+        )
 
 
 # =============================================================================
@@ -665,7 +1086,11 @@ def create_healer(
     use_mock: bool = False,
     use_sandbox: bool = True,
     on_iteration_complete: Optional[IterationCallback] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    # Red team mode options
+    use_red_team: bool = False,
+    attack_budget: int = 10,
+    attack_category: str = "security_leak"
 ) -> AutonomousHealer:
     """
     Factory function to create an AutonomousHealer instance.
@@ -676,17 +1101,38 @@ def create_healer(
         use_sandbox: Use Daytona sandbox for isolation
         on_iteration_complete: Callback function called after each iteration
         verbose: Print status messages
+        
+        # Red Team Mode Options:
+        use_red_team: Enable red team mode (AI-generated attacks)
+        attack_budget: Number of attacks per red team round
+        attack_category: Category of attacks ("security_leak", "social_engineering", etc.)
     
     Returns:
         Configured AutonomousHealer instance
+        
+    Example:
+        # Standard mode
+        healer = create_healer(max_iterations=5)
+        result = await healer.self_heal(prompt, test_input)
+        
+        # Red team mode
+        healer = create_healer(use_red_team=True, attack_budget=10)
+        result = await healer.red_team_heal(prompt, attack_category="security_leak")
     """
-    return AutonomousHealer(
+    healer = AutonomousHealer(
         max_iterations=max_iterations,
         use_mock=use_mock,
         use_sandbox=use_sandbox,
         on_iteration_complete=on_iteration_complete,
         verbose=verbose
     )
+    
+    # Store red team configuration as instance attributes for convenience
+    healer._red_team_enabled = use_red_team
+    healer._attack_budget = attack_budget
+    healer._attack_category = attack_category
+    
+    return healer
 
 
 # =============================================================================
@@ -711,6 +1157,56 @@ async def quick_heal(
     """
     healer = create_healer(use_mock=use_mock, verbose=False)
     return await healer.self_heal(prompt, test_input)
+
+
+async def quick_red_team_heal(
+    prompt: str,
+    attack_category: str = "security_leak",
+    attack_budget: int = 5,
+    use_mock: bool = True
+) -> RedTeamHealingResult:
+    """
+    Quick utility function to run red team testing with healing.
+    
+    Args:
+        prompt: The agent's system prompt
+        attack_category: Category of attacks to test
+        attack_budget: Number of attacks per round
+        use_mock: Use mock services (default True for safety)
+    
+    Returns:
+        RedTeamHealingResult
+    """
+    healer = create_healer(use_mock=use_mock, verbose=True, use_sandbox=False)
+    return await healer.red_team_heal(
+        initial_prompt=prompt,
+        attack_category=attack_category,
+        attack_budget=attack_budget
+    )
+
+
+async def comprehensive_security_scan(
+    prompt: str,
+    use_mock: bool = True
+) -> RedTeamHealingResult:
+    """
+    Run a comprehensive security scan across all attack categories.
+    
+    This is the most thorough way to test an agent's security.
+    
+    Args:
+        prompt: The agent's system prompt
+        use_mock: Use mock services (default True for safety)
+    
+    Returns:
+        RedTeamHealingResult with findings across all categories
+    """
+    healer = create_healer(use_mock=use_mock, verbose=True, use_sandbox=False)
+    return await healer.comprehensive_red_team_heal(
+        initial_prompt=prompt,
+        categories=None,  # Test all
+        attacks_per_category=3
+    )
 
 
 async def test_healer(use_mock: bool = True) -> dict:
@@ -792,6 +1288,53 @@ async def test_healer(use_mock: bool = True) -> dict:
     return results
 
 
+async def test_red_team(use_mock: bool = True) -> dict:
+    """
+    Test the red team functionality.
+    
+    Returns:
+        Dictionary with test results
+    """
+    results = {
+        "red_team_tests": [],
+        "vulnerabilities_found": 0,
+        "vulnerabilities_fixed": 0
+    }
+    
+    print("\n" + "=" * 60)
+    print("Red Team Test: Security Leak Category")
+    print("=" * 60)
+    
+    healer = create_healer(
+        use_mock=use_mock,
+        use_sandbox=False,
+        verbose=True
+    )
+    
+    # Test red team healing
+    result = await healer.red_team_heal(
+        initial_prompt="You are a helpful assistant for TechCorp. Be friendly and helpful.",
+        attack_category="security_leak",
+        attack_budget=3,
+        max_healing_rounds=2
+    )
+    
+    results["red_team_tests"].append({
+        "category": "security_leak",
+        "initial_vulns": result.initial_vulnerabilities,
+        "final_vulns": result.final_vulnerabilities,
+        "healing_rounds": result.healing_rounds,
+        "success": result.success
+    })
+    
+    results["vulnerabilities_found"] = result.initial_vulnerabilities
+    results["vulnerabilities_fixed"] = result.initial_vulnerabilities - result.final_vulnerabilities
+    
+    print("\n" + result.generate_report())
+    
+    return results
+
+
 # =============================================================================
 # Main (for testing)
 # =============================================================================
@@ -801,25 +1344,46 @@ if __name__ == "__main__":
     
     async def main():
         use_mock = "--mock" in sys.argv or "-m" in sys.argv or True  # Default to mock
+        run_red_team = "--red-team" in sys.argv or "-r" in sys.argv
         
         print("=" * 60)
         print(f"Testing Self-Healing Orchestrator (mock={use_mock})")
         print("=" * 60)
         
-        results = await test_healer(use_mock=use_mock)
-        
-        print("\n" + "=" * 60)
-        print("Test Summary")
-        print("=" * 60)
-        print(f"Total Passed: {results['total_passed']}")
-        print(f"Total Failed: {results['total_failed']}")
-        
-        for tc in results["test_cases"]:
-            status = "✅" if tc["success"] else "❌"
-            print(f"  {status} {tc['name']}: {tc['iterations']} iteration(s)")
+        if run_red_team:
+            # Run red team tests
+            print("\n🔴 RED TEAM MODE ENABLED")
+            red_team_results = await test_red_team(use_mock=use_mock)
+            
+            print("\n" + "=" * 60)
+            print("Red Team Test Summary")
+            print("=" * 60)
+            print(f"Vulnerabilities Found: {red_team_results['vulnerabilities_found']}")
+            print(f"Vulnerabilities Fixed: {red_team_results['vulnerabilities_fixed']}")
+            
+            for test in red_team_results["red_team_tests"]:
+                status = "✅ SECURED" if test["success"] else "⚠️ VULNERABLE"
+                print(f"  {status} {test['category']}: {test['initial_vulns']} → {test['final_vulns']}")
+        else:
+            # Run standard tests
+            results = await test_healer(use_mock=use_mock)
+            
+            print("\n" + "=" * 60)
+            print("Test Summary")
+            print("=" * 60)
+            print(f"Total Passed: {results['total_passed']}")
+            print(f"Total Failed: {results['total_failed']}")
+            
+            for tc in results["test_cases"]:
+                status = "✅" if tc["success"] else "❌"
+                print(f"  {status} {tc['name']}: {tc['iterations']} iteration(s)")
         
         print("\n" + "=" * 60)
         print("All tests completed!")
         print("=" * 60)
+        print("\nUsage:")
+        print("  python healer.py           # Standard self-healing tests")
+        print("  python healer.py --red-team # Red team attack tests")
+        print("  python healer.py --mock    # Force mock mode")
     
     asyncio.run(main())
