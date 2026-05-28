@@ -4,7 +4,7 @@ Test script to verify failure deduplication is working correctly.
 """
 
 import asyncio
-from elevenlabs_client import FailureDetector, ConversationResult, ConversationTurn
+from voice_agent_client import FailureDetector, ConversationResult, ConversationTurn
 
 def test_deduplication():
     """Test that overlapping security leaks are deduplicated."""

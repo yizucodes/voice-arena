@@ -7,7 +7,7 @@ This helps diagnose if there's a discrepancy between mock and real responses.
 import asyncio
 import os
 from dotenv import load_dotenv
-from elevenlabs_client import get_elevenlabs_client, FailureDetector
+from voice_agent_client import get_voice_agent_client, FailureDetector
 
 # Load environment variables
 load_dotenv()
@@ -23,7 +23,7 @@ async def test_conversation(use_mock: bool, prompt: str, test_input: str):
     print(f"{'='*70}\n")
     
     # Get client
-    client = get_elevenlabs_client(use_mock=use_mock)
+    client = get_voice_agent_client(use_mock=use_mock)
     print(f"Client type: {type(client).__name__}")
     
     # Run conversation
@@ -69,8 +69,8 @@ async def main():
     print("="*70)
     
     # Check API key availability
-    has_elevenlabs_key = bool(os.getenv("ELEVENLABS_API_KEY"))
-    print(f"\nElevenLabs API Key: {'✓ Available' if has_elevenlabs_key else '✗ Not Set'}")
+    has_voice_agent_key = bool(os.getenv("VOICE_AGENT_API_KEY"))
+    print(f"\nVoice Agent API Key: {'✓ Available' if has_voice_agent_key else '✗ Not Set'}")
     
     # Test with mock
     print("\n" + "🔵 " * 35)
@@ -81,7 +81,7 @@ async def main():
     )
     
     # Test with real API if key is available
-    if has_elevenlabs_key:
+    if has_voice_agent_key:
         print("🟢 " * 35)
         real_result, real_failures = await test_conversation(
             use_mock=False,
@@ -107,7 +107,7 @@ async def main():
         print(f"{'─'*70}")
     else:
         print("\n⚠️  Skipping real API test (no API key)")
-        print("   To test with real API, set ELEVENLABS_API_KEY in .env")
+        print("   To test with real API, set VOICE_AGENT_API_KEY in .env")
     
     print("\n" + "="*70)
     print("TEST COMPLETE")

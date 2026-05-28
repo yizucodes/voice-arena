@@ -54,13 +54,13 @@ async def test_sentry_integration():
     
     healer = create_healer(
         max_iterations=2,  # Just 2 iterations for quick test
-        use_mock=True,     # Use mock ElevenLabs, OpenAI, Daytona
+        use_mock=True,     # Use mock Voice Agent, OpenAI, Daytona
         use_sandbox=False, # Skip sandbox for faster test
         verbose=True
     )
     
     print("   ✓ Healer created")
-    print(f"   - Mock ElevenLabs: ✓")
+    print(f"   - Mock Voice Agent: ✓")
     print(f"   - Mock OpenAI: ✓")
     print(f"   - Mock Daytona: ✓")
     print(f"   - Mock Sentry API: ✓")

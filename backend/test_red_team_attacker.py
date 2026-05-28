@@ -47,7 +47,7 @@ from healer import (
     RedTeamHealingResult,
 )
 
-from elevenlabs_client import MockElevenLabsClient
+from voice_agent_client import MockVoiceAgentClient
 
 
 # =============================================================================
@@ -62,8 +62,8 @@ def mock_generator():
 
 @pytest.fixture
 def mock_agent_tester():
-    """Create a mock ElevenLabs client for testing."""
-    return MockElevenLabsClient()
+    """Create a mock Voice Agent client for testing."""
+    return MockVoiceAgentClient()
 
 
 @pytest.fixture

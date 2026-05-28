@@ -26,7 +26,7 @@ from healer import (
 )
 
 # Import dependencies for mocking
-from elevenlabs_client import ConversationResult, ConversationTurn, FailureDetection
+from voice_agent_client import ConversationResult, ConversationTurn, FailureDetection
 from openai_fixer import FixResult
 
 
@@ -291,7 +291,7 @@ class TestAutonomousHealerInitialization:
         await healer._initialize_clients()
         
         assert healer._daytona_client is not None
-        assert healer._elevenlabs_client is not None
+        assert healer._voice_agent_client is not None
         assert healer._openai_fixer is not None
         assert healer._failure_detector is not None
 
