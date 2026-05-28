@@ -265,9 +265,9 @@ def start_iteration_span(
 
 
 def start_conversation_span(iteration: int, test_input: str):
-    """Start a span for ElevenLabs conversation test."""
+    """Start a span for Voice Agent conversation test."""
     span = sentry_sdk.start_span(
-        op="elevenlabs.conversation",
+        op="voice_agent.conversation",
         description=f"Conversation test (iteration {iteration})",
     )
     span.set_tag("iteration", iteration)
@@ -346,13 +346,13 @@ def capture_exception(exception: Exception, **kwargs):
 @contextmanager
 def start_voice_agent_span(
     agent_name: str = "Voice Arena Agent",
-    model: str = "eleven_turbo_v2",
+    model: str = "voice_agent_v1",
     prompt: Optional[str] = None,
     test_input: Optional[str] = None,
     iteration: Optional[int] = None
 ):
     """
-    Start a gen_ai.invoke_agent span for ElevenLabs voice agent.
+    Start a gen_ai.invoke_agent span for Voice Agent voice agent.
     
     This makes the agent appear in Sentry's AI Agents Insights dashboard.
     Required by Sentry for agents to show in AI monitoring.
@@ -364,7 +364,7 @@ def start_voice_agent_span(
     
     Args:
         agent_name: Name of the agent (appears in dashboard)
-        model: ElevenLabs model ID
+        model: Voice Agent model ID
         prompt: Agent's system prompt
         test_input: User's test input
         iteration: Current iteration number
@@ -437,8 +437,8 @@ def set_voice_agent_result(
         response_text: Agent's response text
         success: Whether the invocation succeeded
         duration_seconds: How long it took
-        input_tokens: Token count (if available from ElevenLabs)
-        output_tokens: Token count (if available from ElevenLabs)
+        input_tokens: Token count (if available from Voice Agent)
+        output_tokens: Token count (if available from Voice Agent)
     """
     if span is None:
         return

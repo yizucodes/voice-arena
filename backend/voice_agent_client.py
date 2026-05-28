@@ -1,7 +1,7 @@
 """
-ElevenLabs Voice Agent Integration Module
+Voice Agent Integration Module
 
-Provides voice agent testing capabilities using ElevenLabs Conversational AI.
+Provides voice agent testing capabilities.
 Supports both real API calls and mock mode for testing.
 
 Key features:
@@ -39,10 +39,10 @@ load_dotenv()
 # Constants
 # =============================================================================
 
-ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
-ELEVENLABS_WS_BASE = "wss://api.elevenlabs.io/v1"
+VOICE_AGENT_API_BASE = "https://api.voice-agent.local/v1"
+VOICE_AGENT_WS_BASE = "wss://api.voice-agent.local/v1"
 DEFAULT_VOICE_ID = "cgSgspJ2msm6clMCkdW9"  # Jessica voice
-DEFAULT_MODEL_ID = "eleven_turbo_v2"
+DEFAULT_MODEL_ID = "voice_agent_v1"
 
 
 # =============================================================================
@@ -298,8 +298,8 @@ class FailureDetector:
 # Abstract Client Interface
 # =============================================================================
 
-class BaseElevenLabsClient(ABC):
-    """Abstract base class for ElevenLabs client implementations."""
+class BaseVoiceAgentClient(ABC):
+    """Abstract base class for Voice Agent client implementations."""
     
     @abstractmethod
     async def simulate_conversation(
@@ -343,9 +343,9 @@ class BaseElevenLabsClient(ABC):
 # Mock Implementation
 # =============================================================================
 
-class MockElevenLabsClient(BaseElevenLabsClient):
+class MockVoiceAgentClient(BaseVoiceAgentClient):
     """
-    Mock ElevenLabs client for testing without API.
+    Mock Voice Agent client for testing without API.
     
     Simulates different agent behaviors based on:
     - Prompt content (has security rules → good response)
@@ -491,7 +491,7 @@ class MockElevenLabsClient(BaseElevenLabsClient):
         # Start gen_ai.invoke_agent span for Sentry AI Agent Monitoring
         with start_voice_agent_span(
             agent_name="Voice Arena Agent (Mock)",
-            model="eleven_turbo_v2",
+            model="voice_agent_v1",
             prompt=agent_prompt,
             test_input=test_input,
             iteration=iteration
@@ -550,26 +550,26 @@ class MockElevenLabsClient(BaseElevenLabsClient):
 
 
 # =============================================================================
-# Real ElevenLabs Implementation
+# Real Voice Agent Implementation
 # =============================================================================
 
-class ElevenLabsClient(BaseElevenLabsClient):
+class VoiceAgentClient(BaseVoiceAgentClient):
     """
-    Real ElevenLabs client using the Conversational AI API.
+    Real Voice Agent client using the Conversational AI API.
     
     Uses HTTP API for agent management and WebSocket for conversations.
     """
     
     def __init__(self, api_key: Optional[str] = None):
         """
-        Initialize ElevenLabs client.
+        Initialize Voice Agent client.
         
         Args:
-            api_key: ElevenLabs API key (falls back to env var)
+            api_key: Voice Agent API key (falls back to env var)
         """
-        self._api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
+        self._api_key = api_key or os.getenv("VOICE_AGENT_API_KEY")
         if not self._api_key:
-            raise ValueError("ELEVENLABS_API_KEY not provided")
+            raise ValueError("VOICE_AGENT_API_KEY not provided")
         
         self._headers = {
             "xi-api-key": self._api_key,
@@ -594,7 +594,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
         Returns:
             The created agent ID
         """
-        url = f"{ELEVENLABS_API_BASE}/convai/agents/create"
+        url = f"{VOICE_AGENT_API_BASE}/convai/agents/create"
         
         payload = {
             "conversation_config": {
@@ -637,7 +637,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
         Returns:
             True if deletion was successful
         """
-        url = f"{ELEVENLABS_API_BASE}/convai/agents/{agent_id}"
+        url = f"{VOICE_AGENT_API_BASE}/convai/agents/{agent_id}"
         
         async with aiohttp.ClientSession() as session:
             async with session.delete(url, headers=self._headers) as response:
@@ -659,7 +659,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
         Returns:
             The signed WebSocket URL
         """
-        url = f"{ELEVENLABS_API_BASE}/convai/conversation/get-signed-url"
+        url = f"{VOICE_AGENT_API_BASE}/convai/conversation/get-signed-url"
         params = {"agent_id": agent_id}
         
         async with aiohttp.ClientSession() as session:
@@ -893,7 +893,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
         iteration: int = 1
     ) -> ConversationResult:
         """
-        Simulate a conversation with a real ElevenLabs agent.
+        Simulate a conversation with a real Voice Agent agent.
         
         Wrapped with gen_ai.invoke_agent span for Sentry AI Agent Monitoring.
         
@@ -941,7 +941,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
                     )
                 
                 # Step 3: Run conversation via WebSocket
-                debug_mode = os.getenv("ELEVENLABS_DEBUG", "").lower() in ("1", "true", "yes")
+                debug_mode = os.getenv("VOICE_AGENT_DEBUG", "").lower() in ("1", "true", "yes")
                 turns = await self._run_websocket_conversation(
                     signed_url=signed_url,
                     test_input=test_input,
@@ -964,7 +964,7 @@ class ElevenLabsClient(BaseElevenLabsClient):
                     response_text=response_text,
                     success=True,
                     duration_seconds=duration
-                    # Note: ElevenLabs doesn't provide token counts
+                    # Note: Voice Agent doesn't provide token counts
                 )
                 
                 return ConversationResult(
@@ -1026,47 +1026,47 @@ class ElevenLabsClient(BaseElevenLabsClient):
 # Factory Function
 # =============================================================================
 
-def get_elevenlabs_client(
+def get_voice_agent_client(
     use_mock: bool = False,
     api_key: Optional[str] = None
-) -> BaseElevenLabsClient:
+) -> BaseVoiceAgentClient:
     """
-    Factory function to get the appropriate ElevenLabs client.
+    Factory function to get the appropriate Voice Agent client.
     
     Args:
-        use_mock: If True, always return MockElevenLabsClient
+        use_mock: If True, always return MockVoiceAgentClient
         api_key: Optional API key (falls back to env var)
     
     Returns:
-        An ElevenLabs client instance (Mock or Real)
+        An Voice Agent client instance (Mock or Real)
     
     Fallback behavior:
-        1. If use_mock=True → MockElevenLabsClient
-        2. If API key not available → MockElevenLabsClient (with warning)
-        3. Otherwise → ElevenLabsClient
+        1. If use_mock=True → MockVoiceAgentClient
+        2. If API key not available → MockVoiceAgentClient (with warning)
+        3. Otherwise → VoiceAgentClient
     """
     if use_mock:
-        return MockElevenLabsClient()
+        return MockVoiceAgentClient()
     
-    resolved_api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
+    resolved_api_key = api_key or os.getenv("VOICE_AGENT_API_KEY")
     if not resolved_api_key:
-        print("⚠️  ELEVENLABS_API_KEY not set. Falling back to mock client.")
-        return MockElevenLabsClient()
+        print("⚠️  VOICE_AGENT_API_KEY not set. Falling back to mock client.")
+        return MockVoiceAgentClient()
     
     try:
-        return ElevenLabsClient(api_key=resolved_api_key)
+        return VoiceAgentClient(api_key=resolved_api_key)
     except Exception as e:
-        print(f"⚠️  Failed to initialize ElevenLabs client ({e}). Falling back to mock client.")
-        return MockElevenLabsClient()
+        print(f"⚠️  Failed to initialize Voice Agent client ({e}). Falling back to mock client.")
+        return MockVoiceAgentClient()
 
 
 # =============================================================================
 # Utility Functions
 # =============================================================================
 
-async def test_elevenlabs_connection(use_mock: bool = False) -> dict:
+async def test_voice_agent_connection(use_mock: bool = False) -> dict:
     """
-    Test ElevenLabs connection by simulating a conversation.
+    Test Voice Agent connection by simulating a conversation.
     
     Returns:
         Dictionary with test results
@@ -1081,7 +1081,7 @@ async def test_elevenlabs_connection(use_mock: bool = False) -> dict:
     }
     
     try:
-        client = get_elevenlabs_client(use_mock=use_mock)
+        client = get_voice_agent_client(use_mock=use_mock)
         results["client_type"] = type(client).__name__
         
         # Run test conversation
@@ -1186,12 +1186,12 @@ if __name__ == "__main__":
         use_mock = "--mock" in sys.argv or "-m" in sys.argv
         
         print("=" * 60)
-        print(f"Testing ElevenLabs Integration (mock={use_mock})")
+        print(f"Testing Voice Agent Integration (mock={use_mock})")
         print("=" * 60)
         
         # Test connection
         print("\n1. Testing connection...")
-        results = await test_elevenlabs_connection(use_mock=use_mock)
+        results = await test_voice_agent_connection(use_mock=use_mock)
         
         print(f"   Client Type: {results['client_type']}")
         print(f"   Conversation Success: {results['conversation_success']}")
@@ -1212,7 +1212,7 @@ if __name__ == "__main__":
         
         # Test mock conversation scenarios
         print("\n3. Testing mock conversation scenarios...")
-        mock_client = MockElevenLabsClient()
+        mock_client = MockVoiceAgentClient()
         
         # Scenario 1: Security leak
         print("\n   Scenario A: Security leak test (iteration 1)")

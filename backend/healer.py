@@ -25,9 +25,9 @@ import sentry_sdk
 
 # Import our components
 from daytona import get_daytona_client, BaseDaytonaClient, BaseSandbox
-from elevenlabs_client import (
-    get_elevenlabs_client,
-    BaseElevenLabsClient,
+from voice_agent_client import (
+    get_voice_agent_client,
+    BaseVoiceAgentClient,
     FailureDetector,
     ConversationResult,
     FailureDetection
@@ -226,7 +226,7 @@ class AutonomousHealer:
     1. Initialize with configuration
     2. For each iteration (up to max_iterations):
        a. Create sandbox for isolation
-       b. Run conversation test via ElevenLabs
+       b. Run conversation test via Voice Agent
        c. Detect failures in transcript
        d. If no failures: SUCCESS, exit loop
        e. If failures and not last iteration:
@@ -270,7 +270,7 @@ class AutonomousHealer:
         
         # Initialize components (will be created per-session)
         self._daytona_client: Optional[BaseDaytonaClient] = None
-        self._elevenlabs_client: Optional[BaseElevenLabsClient] = None
+        self._voice_agent_client: Optional[BaseVoiceAgentClient] = None
         self._openai_fixer: Optional[BaseOpenAIFixer] = None
         self._failure_detector = FailureDetector()
         
@@ -290,14 +290,14 @@ class AutonomousHealer:
     async def _initialize_clients(self):
         """Initialize all client instances."""
         self._daytona_client = get_daytona_client(use_mock=self.use_mock)
-        self._elevenlabs_client = get_elevenlabs_client(use_mock=self.use_mock)
+        self._voice_agent_client = get_voice_agent_client(use_mock=self.use_mock)
         # Always use real GPT-4o fixer (even in mock mode for other services)
         self._openai_fixer = get_openai_fixer(use_mock=False)
         self._sentry_api = get_sentry_api(use_mock=self.use_mock)
         
         self._log(f"Initialized clients (mock={self.use_mock})")
         self._log(f"  Daytona: {type(self._daytona_client).__name__}")
-        self._log(f"  ElevenLabs: {type(self._elevenlabs_client).__name__}")
+        self._log(f"  Voice Agent: {type(self._voice_agent_client).__name__}")
         self._log(f"  OpenAI: {type(self._openai_fixer).__name__} (always real GPT-4o)")
         self._log(f"  Sentry API: {type(self._sentry_api).__name__}")
         self._log(f"  Sentry SDK initialized: {is_sentry_initialized()}")
@@ -356,7 +356,7 @@ class AutonomousHealer:
     ) -> ConversationResult:
         """Run a conversation test with the given prompt."""
         try:
-            result = await self._elevenlabs_client.simulate_conversation(
+            result = await self._voice_agent_client.simulate_conversation(
                 agent_prompt=prompt,
                 test_input=test_input,
                 iteration=iteration
@@ -473,7 +473,7 @@ class AutonomousHealer:
                 
                 # Step 2: Install dependencies in sandbox (if real mode and sandbox exists)
                 if sandbox and not self.use_mock:
-                    await sandbox.install_dependencies(["elevenlabs", "openai"])
+                    await sandbox.install_dependencies(["openai"])
                 
                 # Step 3: Run conversation test with Sentry span
                 self._log(f"Running conversation test (iteration {iteration})...")
@@ -794,7 +794,7 @@ class AutonomousHealer:
             use_mock=self.use_mock,
             attack_budget=attack_budget,
             verbose=self._verbose,
-            agent_tester=self._elevenlabs_client
+            agent_tester=self._voice_agent_client
         )
         
         # Parse attack category

@@ -1015,7 +1015,7 @@ class RedTeamRunner:
     def __init__(
         self,
         attack_generator: BaseAttackGenerator,
-        agent_tester: Any,  # ElevenLabs client or similar
+        agent_tester: Any,  # Voice Agent client or similar
         attack_budget: int = DEFAULT_ATTACK_BUDGET,
         verbose: bool = True
     ):
@@ -1384,7 +1384,7 @@ def create_red_team_runner(
         use_mock: Use mock implementations
         attack_budget: Default attack budget
         verbose: Print status messages
-        agent_tester: ElevenLabs client or similar (auto-created if None)
+        agent_tester: Voice Agent client or similar (auto-created if None)
     
     Returns:
         Configured RedTeamRunner
@@ -1394,10 +1394,10 @@ def create_red_team_runner(
     # Create agent tester if not provided
     if agent_tester is None:
         try:
-            from elevenlabs_client import get_elevenlabs_client
-            agent_tester = get_elevenlabs_client(use_mock=use_mock)
+            from voice_agent_client import get_voice_agent_client
+            agent_tester = get_voice_agent_client(use_mock=use_mock)
         except ImportError:
-            raise ImportError("elevenlabs_client module not found")
+            raise ImportError("voice_agent_client module not found")
     
     return RedTeamRunner(
         attack_generator=attack_generator,

@@ -16,7 +16,6 @@ websockets>=12.0
 # External services
 openai>=1.12.0
 daytona-sdk>=0.10.0
-elevenlabs>=1.0.0
 
 # Sentry - AI Agent monitoring and error tracking
 sentry-sdk[openai]>=1.40.0

@@ -65,11 +65,11 @@ class VoiceAgentError(Exception):
 
 
 class RateLimitExceededError(VoiceAgentError):
-    """ElevenLabs API rate limit exceeded."""
+    """Voice Agent API rate limit exceeded."""
     
     def __init__(self, retry_after: int = 60, quota_remaining: int = 0):
         super().__init__(
-            message=f"ElevenLabs API rate limit exceeded. Retry after {retry_after}s",
+            message=f"Voice Agent API rate limit exceeded. Retry after {retry_after}s",
             error_type=DemoErrorType.RATE_LIMIT,
             context={
                 "retry_after_seconds": retry_after,
@@ -77,7 +77,7 @@ class RateLimitExceededError(VoiceAgentError):
                 "quota_limit": 10000,
                 "reset_time": datetime.now(timezone.utc).isoformat(),
             },
-            fingerprint=["elevenlabs", "rate_limit", "quota_exceeded"]
+            fingerprint=["voice_agent", "rate_limit", "quota_exceeded"]
         )
 
 
@@ -136,7 +136,7 @@ class ConversationLoopError(VoiceAgentError):
 
 
 class APITimeoutError(VoiceAgentError):
-    """ElevenLabs API request timed out."""
+    """Voice Agent API request timed out."""
     
     def __init__(self, timeout_seconds: float = 30.0, endpoint: str = "/v1/convai/conversation"):
         super().__init__(
@@ -149,7 +149,7 @@ class APITimeoutError(VoiceAgentError):
                 "retry_count": 3,
                 "last_response_code": None,
             },
-            fingerprint=["elevenlabs", "timeout", endpoint.split("/")[-1]]
+            fingerprint=["voice_agent", "timeout", endpoint.split("/")[-1]]
         )
 
 
@@ -198,8 +198,8 @@ def _add_voice_breadcrumbs():
     """Add realistic conversation breadcrumbs."""
     breadcrumbs = [
         ("Session started", "voice.session", {"session_id": f"sess_{uuid.uuid4().hex[:8]}"}),
-        ("Agent created", "voice.agent", {"agent_id": f"agent_{uuid.uuid4().hex[:8]}", "model": "eleven_turbo_v2"}),
-        ("WebSocket connected", "voice.websocket", {"url": "wss://api.elevenlabs.io/v1/convai/conversation"}),
+        ("Agent created", "voice.agent", {"agent_id": f"agent_{uuid.uuid4().hex[:8]}", "model": "voice_agent_v1"}),
+        ("WebSocket connected", "voice.websocket", {"url": "wss://api.voice-agent.local/v1/convai/conversation"}),
         ("User message received", "voice.message", {"role": "user", "length": random.randint(20, 100)}),
         ("Audio processing started", "voice.audio", {"format": "webm", "duration_ms": random.randint(1000, 5000)}),
     ]
@@ -218,7 +218,7 @@ def _set_voice_context(extra_context: Optional[Dict[str, Any]] = None):
     base_context = {
         "voice_agent": {
             "agent_id": f"agent_{uuid.uuid4().hex[:8]}",
-            "model": "eleven_turbo_v2",
+            "model": "voice_agent_v1",
             "voice_id": "cgSgspJ2msm6clMCkdW9",
             "voice_name": "Jessica",
             "conversation_turns": random.randint(1, 10),
@@ -253,11 +253,11 @@ def _create_performance_span(error_type: DemoErrorType):
     ) as transaction:
         # Simulate the conversation flow with spans
         with sentry_sdk.start_span(op="voice.init", description="Initialize agent") as span:
-            span.set_data("agent_model", "eleven_turbo_v2")
+            span.set_data("agent_model", "voice_agent_v1")
             time.sleep(0.05)  # Simulate work
         
         with sentry_sdk.start_span(op="voice.connect", description="WebSocket connect") as span:
-            span.set_data("url", "wss://api.elevenlabs.io")
+            span.set_data("url", "wss://api.voice-agent.local")
             time.sleep(0.03)
         
         with sentry_sdk.start_span(op="voice.process", description="Process conversation") as span:
@@ -339,7 +339,7 @@ def trigger_demo_error(
     
     # Set tags
     sentry_sdk.set_tag("error_type", demo_type.value)
-    sentry_sdk.set_tag("voice_model", "eleven_turbo_v2")
+    sentry_sdk.set_tag("voice_model", "voice_agent_v1")
     sentry_sdk.set_tag("demo_mode", "true")
     sentry_sdk.set_tag("environment", "interview_demo")
     
