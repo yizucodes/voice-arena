@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Self-Healing Voice Agent | Autonomous AI Testing",
   description: "The first voice agent that fixes itself. Test → Fail → GPT-4o Fix → Re-Test → Loop until perfect.",
-  keywords: ["voice agent", "AI", "self-healing", "GPT-4o", "ElevenLabs", "Daytona"],
+  keywords: ["voice agent", "AI", "self-healing", "GPT-4o", "Voice Agent", "Daytona"],
 };
 
 export default function RootLayout({
