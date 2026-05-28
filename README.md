@@ -198,7 +198,7 @@ sequenceDiagram
 └─────────────┘                        └─────────────┘
 ```
 
-#### Four steps (demo narration)
+#### Four steps
 
 1. **Session mint** — Backend calls `client_secrets` with the Realtime model, semantic turn detection, transcription, and the `get_patient_record` tool.
 2. **WebRTC voice** — Browser connects with WebRTC: mic in, synthesized speech out. Not chat completions over REST.
