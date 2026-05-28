@@ -125,6 +125,95 @@ Start Realtime
   -> backend defaults to enforce_policy=true
 ```
 
+### OpenAI Realtime Integration
+
+Voice Arena uses **OpenAI Realtime** for speech-to-speech voice and **your FastAPI backend** for the policy gateway on tool calls. OpenAI runs the conversation; Voice Arena controls what patient data the model is allowed to receive and speak.
+
+**One-liner:** OpenAI Realtime runs speech-to-speech and tool calling. Voice Arena sits on the **tool boundary** — we decide what PHI the model is allowed to receive and speak.
+
+#### What calls OpenAI (healthcare demo)
+
+| # | Who | OpenAI endpoint / feature | Purpose |
+|---|-----|---------------------------|---------|
+| 1 | **Backend** | `POST /v1/realtime/client_secrets` | Mint short-lived secret; attach session config (model, voice, VAD, tools) |
+| 2 | **Browser** | `POST /v1/realtime/calls` | WebRTC handshake — send SDP offer, get SDP answer |
+| 3 | **Browser ↔ OpenAI** | **WebRTC audio stream** | Speech in (mic) + speech out (agent voice) — not REST polling |
+| 4 | **Browser ↔ OpenAI** | **Data channel** `oai-events` | Realtime events: transcripts, function calls, tool results |
+| 5 | **Session config** | `gpt-realtime-2` | Speech-to-speech Realtime model |
+| 6 | **Session config** | `semantic_vad` | Turn detection — when the caller stops speaking |
+| 7 | **Session config** | `gpt-4o-mini-transcribe` | Transcribe caller audio for the eval harness / live transcript |
+| 8 | **Session config** | Function tool `get_patient_record` | Model decides when to look up patient data mid-conversation |
+
+**Voice Arena (not OpenAI):** `POST /tools/get-patient-record` — policy gateway, incident log, regression artifact. The Realtime model never hits your EHR directly; the **browser bridges** function calls to your server.
+
+**Not in the healthcare demo path:** GPT-4o chat completions (legacy self-healing / red-team modes).
+
+#### Live path sequence
+
+```mermaid
+sequenceDiagram
+    participant You as Caller (mic)
+    participant UI as Browser / Voice Arena UI
+    participant API as Your Backend (FastAPI)
+    participant OAI as OpenAI Realtime
+
+    UI->>API: POST /realtime/session
+    API->>OAI: POST /v1/realtime/client_secrets
+    Note over API,OAI: Session config: gpt-realtime-2,<br/>semantic_vad, gpt-4o-mini-transcribe,<br/>tool get_patient_record
+    OAI-->>API: ephemeral client_secret
+    API-->>UI: client_secret + model name
+
+    UI->>UI: getUserMedia + RTCPeerConnection
+    UI->>OAI: POST /v1/realtime/calls (SDP offer)
+    OAI-->>UI: SDP answer
+    Note over You,OAI: WebRTC: speech in / speech out
+
+    You->>OAI: Speak ER doctor attack
+    OAI->>UI: Data channel: function_call get_patient_record
+    Note over UI: Tool call intercepted
+
+    UI->>API: POST /tools/get-patient-record
+    Note over API: enforce_policy=true<br/>block PHI, save incident
+    API-->>UI: safe tool_output + incident
+    Note over UI: Policy decision logged
+
+    UI->>OAI: function_call_output + response.create
+    OAI->>You: Spoken safe escalation (audio)
+```
+
+#### Stack at a glance
+
+```text
+┌─────────────┐     client_secret      ┌─────────────┐
+│  Your       │ ◀──────────────────────│  OpenAI     │
+│  Backend    │  /realtime/client_secrets│  Realtime   │
+└──────┬──────┘                        └──────▲──────┘
+       │                                      │
+       │ policy gateway                       │ WebRTC
+       │ /tools/get-patient-record            │ audio + data channel
+       │                                      │
+┌──────▼──────┐   bridges tool calls    ┌──────┴──────┐
+│  Browser    │ ─────────────────────▶│  gpt-realtime-2
+│  Voice Arena│ ◀──── speech in/out ──│  + get_patient_record tool
+└─────────────┘                        └─────────────┘
+```
+
+#### Four steps (demo narration)
+
+1. **Session mint** — Backend calls `client_secrets` with the Realtime model, semantic turn detection, transcription, and the `get_patient_record` tool.
+2. **WebRTC voice** — Browser connects with WebRTC: mic in, synthesized speech out. Not chat completions over REST.
+3. **Function call bridge** — When Realtime emits a tool call, the browser intercepts it and calls your gateway — not OpenAI, not the EHR.
+4. **Tool result back** — Sanitized `function_call_output` goes back on the data channel; the model speaks only `allowed_response`.
+
+```text
+① POST /v1/realtime/client_secrets  →  ephemeral key
+② POST /v1/realtime/calls            →  WebRTC audio
+③ function_call                      →  your /tools/get-patient-record
+④ function_call_output               →  safe speech out
+```
+
+Session config is built in `backend/main.py` (`build_healthcare_realtime_session_config`). The browser WebRTC and tool-call bridge live in `frontend/src/app/page.tsx`.
+
 The reliable stage demo is the scripted A/B replay. The live mic path is available when `OPENAI_API_KEY` and browser microphone permissions are configured.
 
 ---
