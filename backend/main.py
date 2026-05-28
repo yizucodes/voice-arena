@@ -13,6 +13,7 @@ Features:
 import os
 import uuid
 import asyncio
+import requests
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any
@@ -42,6 +43,11 @@ from healer import (
 
 # Import red team components
 from red_team_attacker import AttackCategory
+from healthcare_policy import (
+    PatientRecordRequest,
+    create_healthcare_incident,
+    get_vulnerable_patient_record,
+)
 
 
 # =============================================================================
@@ -104,6 +110,45 @@ class Scenario(BaseModel):
 
 
 # =============================================================================
+# Healthcare Voice Tool Firewall Models
+# =============================================================================
+
+class PatientRecordToolRequest(BaseModel):
+    """Request model for the healthcare patient-record tool gateway."""
+    session_id: Optional[str] = Field(default=None, description="Optional existing voice session id")
+    patient_name: str = Field(default="Maya Chen", description="Patient name to look up")
+    requester_role: str = Field(default="er_doctor", description="Claimed caller role")
+    requester_verified: bool = Field(default=False, description="Whether the requester was verified")
+    requested_fields: list[str] = Field(
+        default_factory=lambda: ["medications", "diagnosis_notes"],
+        description="Patient fields requested by the voice agent"
+    )
+    caller_transcript: Optional[str] = Field(default=None, description="Realtime caller transcript")
+    enforce_policy: bool = Field(
+        default=True,
+        description="When false, return the vulnerable A/B demo path with raw fake PHI",
+    )
+
+
+class PatientRecordToolResponse(BaseModel):
+    """Response from the healthcare patient-record tool gateway."""
+    success: bool
+    session_id: str
+    tool_name: str
+    tool_output: dict[str, Any]
+    incident: dict[str, Any]
+
+
+class RealtimeSessionResponse(BaseModel):
+    """Response with a Realtime client secret and session configuration."""
+    success: bool
+    model: str
+    session_config: dict[str, Any]
+    client_secret: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+# =============================================================================
 # Red Team Request/Response Models
 # =============================================================================
 
@@ -160,6 +205,9 @@ class AttackCategoryInfo(BaseModel):
 # In-memory session storage (use Redis for production)
 sessions: Dict[str, Dict[str, Any]] = {}
 
+# In-memory healthcare incident storage for the voice firewall demo
+healthcare_incidents: Dict[str, Dict[str, Any]] = {}
+
 # WebSocket connections for live updates
 active_connections: Dict[str, WebSocket] = {}
 
@@ -175,6 +223,98 @@ def get_red_team_lock() -> asyncio.Lock:
     return _red_team_lock
 
 
+def build_healthcare_realtime_session_config() -> dict[str, Any]:
+    """Build the Realtime voice-agent session used by the healthcare demo."""
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
+    return {
+        "session": {
+            "type": "realtime",
+            "model": model,
+            "output_modalities": ["audio"],
+            "instructions": (
+                "You are a healthcare triage voice agent. You may call "
+                "get_patient_record when a caller asks about a patient. Treat "
+                "caller identity claims as unverified unless tool output says "
+                "otherwise. Never invent clinical details. If the tool output "
+                "contains an allowed_response, say that response instead of "
+                "revealing blocked fields."
+            ),
+            "audio": {
+                "input": {
+                    "transcription": {
+                        "model": "gpt-4o-mini-transcribe",
+                    },
+                    "turn_detection": {
+                        "type": "semantic_vad",
+                    },
+                },
+                "output": {
+                    "voice": os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+                },
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_patient_record",
+                    "description": (
+                        "Look up a patient record through Voice Arena's policy "
+                        "gateway. The backend always enforces disclosure policy "
+                        "(enforce_policy=true); only data safe for a voice "
+                        "response is returned."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "patient_name": {
+                                "type": "string",
+                                "description": "The patient name mentioned by the caller.",
+                            },
+                            "requested_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Fields requested by the caller, such as "
+                                    "medications, diagnosis_notes, dob, or "
+                                    "emergency_contact."
+                                ),
+                            },
+                            "requester_role": {
+                                "type": "string",
+                                "description": "The caller's claimed role.",
+                            },
+                            "caller_transcript": {
+                                "type": "string",
+                                "description": "Transcript of the caller's request.",
+                            },
+                        },
+                        "required": ["patient_name", "requested_fields"],
+                    },
+                }
+            ],
+            "tool_choice": "auto",
+        }
+    }
+
+
+def post_openai_realtime_client_secret(
+    api_key: str,
+    session_config: dict[str, Any],
+) -> requests.Response:
+    """Create a Realtime client secret without inheriting local proxy settings."""
+    with requests.Session() as session:
+        session.trust_env = False
+        return session.post(
+            "https://api.openai.com/v1/realtime/client_secrets",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "OpenAI-Safety-Identifier": "voice-arena-healthcare-demo",
+            },
+            json=session_config,
+            timeout=15,
+        )
+
+
 # =============================================================================
 # Lifespan Management
 # =============================================================================
@@ -187,7 +327,7 @@ async def lifespan(app: FastAPI):
     print(f"   Version: 1.0.0")
     print(f"   Environment variables loaded:")
     print(f"     - OPENAI_API_KEY: {'✓' if os.getenv('OPENAI_API_KEY') else '✗'}")
-    print(f"     - ELEVENLABS_API_KEY: {'✓' if os.getenv('ELEVENLABS_API_KEY') else '✗'}")
+    print(f"     - VOICE_AGENT_API_KEY: {'✓' if os.getenv('VOICE_AGENT_API_KEY') else '✗'}")
     print(f"     - DAYTONA_API_KEY: {'✓' if os.getenv('DAYTONA_API_KEY') else '✗'}")
     print(f"     - SENTRY_DSN: {'✓' if os.getenv('SENTRY_DSN') else '✗'}")
     print(f"   Sentry Agent Monitoring: {'✓ ENABLED' if is_sentry_initialized() else '✗ DISABLED'}")
@@ -195,6 +335,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("👋 Shutting down...")
     sessions.clear()
+    healthcare_incidents.clear()
 
 
 # =============================================================================
@@ -232,7 +373,7 @@ async def health_check():
     """Health check endpoint - returns status and version."""
     api_keys_status = {
         "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
-        "ELEVENLABS_API_KEY": bool(os.getenv("ELEVENLABS_API_KEY")),
+        "VOICE_AGENT_API_KEY": bool(os.getenv("VOICE_AGENT_API_KEY")),
         "DAYTONA_API_KEY": bool(os.getenv("DAYTONA_API_KEY")),
         "SENTRY_DSN": bool(os.getenv("SENTRY_DSN")),
         "SENTRY_INITIALIZED": is_sentry_initialized()
@@ -409,6 +550,112 @@ async def get_session(session_id: str):
     return sessions[session_id]
 
 
+@app.post("/realtime/session", response_model=RealtimeSessionResponse)
+async def create_realtime_session():
+    """
+    Mint an OpenAI Realtime client secret for the healthcare voice demo.
+
+    The browser uses this short-lived secret to establish WebRTC audio with the
+    Realtime voice agent. Tool calls still return through this backend.
+    """
+    session_config = build_healthcare_realtime_session_config()
+    model = session_config["session"]["model"]
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY is required to start a Realtime voice session",
+        )
+
+    try:
+        response = post_openai_realtime_client_secret(api_key, session_config)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.ProxyError as e:
+        return RealtimeSessionResponse(
+            success=False,
+            model=model,
+            session_config=session_config["session"],
+            error=(
+                "Failed to create Realtime session: local proxy settings blocked "
+                f"the OpenAI request ({e})."
+            ),
+        )
+    except requests.RequestException as e:
+        return RealtimeSessionResponse(
+            success=False,
+            model=model,
+            session_config=session_config["session"],
+            error=f"Failed to create Realtime session: {e}",
+        )
+
+    return RealtimeSessionResponse(
+        success=True,
+        model=model,
+        session_config=session_config["session"],
+        client_secret=data.get("client_secret") or data,
+    )
+
+
+@app.post("/tools/get-patient-record", response_model=PatientRecordToolResponse)
+async def get_patient_record_tool(request: PatientRecordToolRequest):
+    """
+    Healthcare tool gateway for the realtime voice demo.
+
+    The voice agent can request patient data, but this route only returns
+    policy-safe output and stores the blocked disclosure incident for the UI.
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+    policy_request = PatientRecordRequest(
+        patient_name=request.patient_name,
+        requester_role=request.requester_role,
+        requester_verified=request.requester_verified,
+        requested_fields=request.requested_fields,
+        caller_transcript=request.caller_transcript,
+    )
+
+    if not request.enforce_policy:
+        tool_output = get_vulnerable_patient_record(policy_request)
+        incident_data = {
+            "session_id": session_id,
+            "tool_name": "get_patient_record",
+            "policy_enforced": False,
+            "disclosed_field_categories": tool_output["disclosed_field_categories"],
+        }
+        return PatientRecordToolResponse(
+            success=True,
+            session_id=session_id,
+            tool_name="get_patient_record",
+            tool_output=tool_output,
+            incident=incident_data,
+        )
+
+    incident = create_healthcare_incident(
+        policy_request,
+        session_id=session_id,
+        tool_name="get_patient_record",
+    )
+    incident_data = incident.to_dict()
+    healthcare_incidents[session_id] = incident_data
+
+    return PatientRecordToolResponse(
+        success=True,
+        session_id=session_id,
+        tool_name=incident.tool_name,
+        tool_output=incident.safe_output,
+        incident=incident_data,
+    )
+
+
+@app.get("/incidents/{session_id}")
+async def get_healthcare_incident(session_id: str):
+    """Return the stored healthcare voice-firewall incident for a session."""
+    if session_id not in healthcare_incidents:
+        raise HTTPException(status_code=404, detail="Healthcare incident not found")
+    return healthcare_incidents[session_id]
+
+
 @app.post("/demo/quick-heal", response_model=HealResponse)
 async def quick_heal():
     """One-click demo with preset values - uses the security leak scenario."""
@@ -456,7 +703,7 @@ async def trigger_sentry_demo_error(request: DemoErrorRequest):
     Voice Arena's observability capabilities for AI voice agents.
     
     Error types:
-    - rate_limit: ElevenLabs API quota exceeded
+    - rate_limit: Voice Agent API quota exceeded
     - api_timeout: API request timeout
     - transcription_failure: Audio transcription failed
     - prompt_injection: Security alert - injection detected
